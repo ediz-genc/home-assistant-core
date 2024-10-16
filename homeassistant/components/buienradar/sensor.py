@@ -87,6 +87,8 @@ ICON_WEATHER_POURING = "mdi:weather-pouring"
 # S19
 ICON_WEATHER_PARTLY_CLOUDY = "mdi:weather-partly-cloudy"
 
+# S21
+NO_FORECAST_LOG_MESSAGE = "No forecast for fcday=%s"
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -776,10 +778,7 @@ class BrSensor(SensorEntity):
         """Update data."""
         if self._load_data(data.data) and self.hass:
             self.async_write_ha_state()
-
-    # S21
-    NO_FORECAST_LOG_MESSAGE = "No forecast for fcday=%s"
-
+            
     # S20
     @callback
     def _load_data(self, data):  # noqa: C901
