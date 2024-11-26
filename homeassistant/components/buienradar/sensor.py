@@ -28,7 +28,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ATTRIBUTION,
     CONF_LATITUDE,
@@ -49,10 +48,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from . import BuienRadarConfigEntry
 from .const import (
     CONF_TIMEFRAME,
     DEFAULT_TIMEFRAME,
-    DOMAIN,
     STATE_CONDITION_CODES,
     STATE_CONDITIONS,
     STATE_DETAILED_CONDITIONS,
@@ -708,7 +707,9 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: BuienRadarConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Create the buienradar sensor."""
     config = entry.data
@@ -741,7 +742,7 @@ async def async_setup_entry(
 
     # create weather data:
     data = BrData(hass, coordinates, timeframe, entities)
-    hass.data[DOMAIN][entry.entry_id][Platform.SENSOR] = data
+    entry.runtime_data[Platform.SENSOR] = data
     await data.async_update()
 
     async_add_entities(entities)
@@ -802,14 +803,31 @@ class BrSensor(SensorEntity):
             return self._update_windspeed(sensor_type, data)
 
         if sensor_type == VISIBILITY:
-            return self._update_visibility(sensor_type, data)
+            # hass wants visibility in km (not m), so convert:
+            self._attr_native_value = data.get(sensor_type)
+            if self.state is not None:
+                self._attr_native_value = round(self.state / 1000, 1)
+            return True
 
-        return self._update_general_sensor(sensor_type, data)
+        # update all other sensors
+        self._attr_native_value = data.get(sensor_type)
+        if sensor_type.startswith(PRECIPITATION_FORECAST):
+            result = {ATTR_ATTRIBUTION: data.get(ATTRIBUTION)}
+            if self._timeframe is not None:
+                result[TIMEFRAME_LABEL] = f"{self._timeframe} min"
 
-    def _is_new_measurement(self, data):
-        if self._measured == data.get(MEASURED):
-            return False
-        self._measured = data.get(MEASURED)
+            self._attr_extra_state_attributes = result
+
+        result = {
+            ATTR_ATTRIBUTION: data.get(ATTRIBUTION),
+            STATIONNAME_LABEL: data.get(STATIONNAME),
+        }
+        if self._measured is not None:
+            # convert datetime (Europe/Amsterdam) into local datetime
+            local_dt = dt_util.as_local(self._measured)
+            result[MEASURED_LABEL] = local_dt.strftime("%c")
+
+        self._attr_extra_state_attributes = result
         return True
 
     def _update_forecast_sensor(self, sensor_type, data):
