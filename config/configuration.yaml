@@ -1,0 +1,145 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  development_repo: /Users/jaylon_ho/Downloads/home-assistant-frontend/
+  # themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+panel_custom:
+  - name: spotify-panel
+    url_path: spotify
+    sidebar_title: Spotify
+    sidebar_icon: mdi:spotify
+    module_url: /local/spotify/spotify-panel.js
+
+spotcast:
+  sp_dc: !secret sp_dc
+  sp_key: !secret sp_key
+  country: SE #optional, added in 3.6.24
+
+logger:
+  default: info
+  logs:
+    homeassistant.components.cloud: debug
+
+switch:
+  - platform: template
+    switches:
+      spotify_usage:
+        value_template: "{{ is_state('media_player.spotify_jialong_he', 'playing') }}"
+        turn_on:
+          service: switch.turn_on
+          target:
+            entity_id: switch.target
+        turn_off:
+          service: switch.turn_off
+          target:
+            entity_id: switch.target
+
+sensor:
+  - platform: template
+    sensors:
+      spotify_volume:
+        value_template: "{{ state_attr('media_player.spotify_jialong_he', 'volume_level') | float * 100 }}"
+        friendly_name: "Spotify Volume"
+        unit_of_measurement: "%"
+  - platform: history_stats
+    name: Spotify Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+  - platform: history_stats
+    name: Spotify Weekly Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) - timedelta(days=now().weekday()) }}"
+    end: "{{ now() }}"
+  - platform: history_stats
+    name: Spotify Monthly Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(day=1, hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+  - platform: template
+    sensors:
+      spotify_carbon_footprint:
+        value_template: >
+          {% set listening_time = states('sensor.spotify_listening_time') | float(0) %}
+          {% set volume = states('sensor.spotify_volume') | float(0) %}
+          {% set tempo = states('sensor.spotify_jialong_he_song_tempo') | float(0) %}
+          {{ (listening_time * 0.02) + (volume * 0.01) + (tempo * 0.005) }}
+        friendly_name: "Spotify Carbon Footprint"
+        unit_of_measurement: "kg CO2"
+
+input_boolean:
+  eco_mode:
+    name: "Eco Mode"
+    initial: off
+    icon: mdi:leaf-circle
+
+input_button:
+  well_being_playlist:
+    name: "Play Well-being Playlist"
+    icon: mdi:playlist-music
+
+automation:
+  - alias: 'Disable Eco Mode: Set Spotify Volume to 1'
+    trigger:
+      platform: state
+      entity_id: input_boolean.eco_mode
+      from: "on"
+      to: "off"
+    action:
+      service: media_player.volume_set
+      target:
+        entity_id: media_player.spotify_jialong_he
+      data:
+        volume_level: 1
+  - alias: 'Enable Eco Mode: Set Spotify Volume to 0.8'
+    trigger:
+      platform: state
+      entity_id: input_boolean.eco_mode
+      from: "off"
+      to: "on"
+    action:
+      service: media_player.volume_set
+      target:
+        entity_id: media_player.spotify_jialong_he
+      data:
+        volume_level: 0.8
+  - alias: "Play Well-being Music"
+    trigger:
+      - platform: state
+        entity_id: input_button.well_being_playlist
+        to: "on"
+    action:
+      - service: spotcast.start
+        target:
+          entity_id: media_player.spotify_jialong_he
+        data:
+          force_playback: true
+          random_song: true
+          repeat: 'off'
+          offset: 0
+          start_position: 0
+          ignore_fully_played: false
+          spotify_device_id: "dbc7cc50416878857e4ab06a1a808e7e22b105d9"
+          shuffle: false
+          uri: spotify:playlist:37i9dQZF1DX4sWSpwq3LiO
+
+# TODO, change the media name to this name, which will be provided by users
+# input_text:
+#   spotify_username:
+#     name: "Spotify Username"
+#     initial: "jialong_he"
+#     max_length: 100
