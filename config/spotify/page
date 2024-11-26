@@ -1,0 +1,79 @@
+views:
+  - title: Home
+    sections:
+      - type: grid
+        cards:
+          - type: media-control
+            entity: media_player.spotify_jialong_he
+          - type: custom:apexcharts-card
+            graph_span: 7d
+            update_interval: 1min
+            series:
+              - entity: sensor.spotify_weekly_listening_time
+                name: Weekly Listening Time
+                color: rgba(51, 195, 255, 0.5)
+          - type: custom:button-card
+            entity: input_button.well_being_playlist
+            icon: mdi:playlist-music
+            name: Play Well-being Music
+            tap_action:
+              action: call-service
+              service: spotcast.start
+              service_data:
+                force_playback: true
+                random_song: true
+                repeat: 'off'
+                offset: 0
+                start_position: 0
+                ignore_fully_played: false
+                spotify_device_id: 86bbeb735592f40e099a3a931ce6ce5967b774f7
+                shuffle: false
+                uri: spotify:playlist:37i9dQZF1DX4sWSpwq3LiO
+            styles:
+              card:
+                - height: 100px
+                - width: 200px
+              name:
+                - font-size: 18px
+          - type: custom:button-card
+            entity: input_boolean.eco_mode
+            show_state: true
+            icon: mdi:leaf-circle
+            size: 100%
+            styles:
+              card:
+                - height: 100px
+                - width: 140px
+                - display: flex
+                - align-items: center
+                - justify-content: center
+            tap_action:
+              action: toggle
+              entity: input_boolean.eco_mode
+      - type: grid
+        cards:
+          - type: entities
+            entities:
+              - switch.spotify_usage
+          - type: entities
+            entities:
+              - sensor.spotify_listening_time
+          - type: entities
+            entities:
+              - sensor.spotify_weekly_listening_time
+          - type: entities
+            entities:
+              - sensor.spotify_monthly_listening_time
+          - type: entities
+            entities:
+              - entity: sensor.spotify_volume
+                icon: mdi:volume-high
+          - type: entities
+            entities:
+              - entity: sensor.spotify_jialong_he_song_tempo
+                name: Song Tempo (BPM)
+                icon: mdi:music-note
+          - type: entities
+            entities:
+              - entity: sensor.spotify_carbon_footprint
+                icon: mdi:leaf-circle
