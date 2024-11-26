@@ -76,8 +76,7 @@ sensor:
         value_template: >
           {% set listening_time = states('sensor.spotify_listening_time') | float(0) %}
           {% set volume = states('sensor.spotify_volume') | float(0) %}
-          {% set tempo = states('sensor.spotify_jialong_he_song_tempo') | float(0) %}
-          {{ (listening_time * 0.02) + (volume * 0.01) + (tempo * 0.005) }}
+          {{ (listening_time * 0.02) + (volume * 0.01) }}
         friendly_name: "Spotify Carbon Footprint"
         unit_of_measurement: "kg CO2"
 
@@ -136,6 +135,15 @@ automation:
           spotify_device_id: "dbc7cc50416878857e4ab06a1a808e7e22b105d9"
           shuffle: false
           uri: spotify:playlist:37i9dQZF1DX4sWSpwq3LiO
+  - alias: Update Spotify Media Player
+    trigger:
+      - platform: time_pattern
+        seconds: '/10'
+    action:
+      - service: homeassistant.update_entity
+        target:
+          entity_id: media_player.spotify_jialong_he
+
 
 # TODO, change the media name to this name, which will be provided by users
 # input_text:

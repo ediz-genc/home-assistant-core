@@ -26,7 +26,7 @@ views:
                 offset: 0
                 start_position: 0
                 ignore_fully_played: false
-                spotify_device_id: 86bbeb735592f40e099a3a931ce6ce5967b774f7
+                spotify_device_id: 63a6a08fb6e445f2dd86bf5e000cf8585a736d56
                 shuffle: false
                 uri: spotify:playlist:37i9dQZF1DX4sWSpwq3LiO
             styles:
@@ -68,11 +68,6 @@ views:
             entities:
               - entity: sensor.spotify_volume
                 icon: mdi:volume-high
-          - type: entities
-            entities:
-              - entity: sensor.spotify_jialong_he_song_tempo
-                name: Song Tempo (BPM)
-                icon: mdi:music-note
           - type: entities
             entities:
               - entity: sensor.spotify_carbon_footprint
