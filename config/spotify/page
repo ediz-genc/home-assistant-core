@@ -9,32 +9,9 @@ views:
             graph_span: 7d
             update_interval: 1min
             series:
-              - entity: sensor.spotify_weekly_listening_time
-                name: Weekly Listening Time
+              - entity: sensor.spotify_carbon_footprint
+                name: Carbon footprint
                 color: rgba(51, 195, 255, 0.5)
-          - type: custom:button-card
-            entity: input_button.well_being_playlist
-            icon: mdi:playlist-music
-            name: Play Well-being Music
-            tap_action:
-              action: call-service
-              service: spotcast.start
-              service_data:
-                force_playback: true
-                random_song: true
-                repeat: 'off'
-                offset: 0
-                start_position: 0
-                ignore_fully_played: false
-                spotify_device_id: 63a6a08fb6e445f2dd86bf5e000cf8585a736d56
-                shuffle: false
-                uri: spotify:playlist:37i9dQZF1DX4sWSpwq3LiO
-            styles:
-              card:
-                - height: 100px
-                - width: 200px
-              name:
-                - font-size: 18px
           - type: custom:button-card
             entity: input_boolean.eco_mode
             show_state: true
@@ -52,6 +29,15 @@ views:
               entity: input_boolean.eco_mode
       - type: grid
         cards:
+          - type: entities
+            entities:
+              - input_text.spotify_media_player
+          - type: entities
+            entities:
+              - input_text.spotify_device_id
+          - type: entities
+            entities:
+              - input_select.spotify_mode
           - type: entities
             entities:
               - switch.spotify_usage
