@@ -7,13 +7,39 @@
 # none
 
 
-class STAppMessages:
-    """
-    A strongly-typed resource class, for looking up localized strings, etc.
+"""Spotify Integration - Application Messages - `appmessages.py`.
 
+This module provides a strongly-typed resource class, `STAppMessages`, for managing localized and structured application
+messages used throughout the Spotify integration. The class ensures consistent and thread-safe access to predefined message
+strings, supporting logging, debugging, and error handling.
+
+Key Features:
+- Predefined message templates for:
+  - Argument validation.
+  - Service call handling and parameter checks.
+  - Service execution tracking.
+  - Debugging Spotify Web API queries.
+  - Exception handling during service requests.
+- Designed to ensure clear and localized logging and debugging messages.
+- Fully thread-safe to support concurrent operations in the Home Assistant environment.
+
+Usage:
+Each message is defined as a class variable (constant) with a descriptive template string. These messages can be formatted
+ dynamically with specific arguments during runtime to provide contextual information.
+
+Examples:
+- Logging missing service parameters:
+  ```python
+  _LOGGER.error(STAppMessages.MSG_SERVICE_ARGUMENT_NULL, "parameter_name", "service_name")
+
+"""
+
+
+class STAppMessages:
+    """A strongly-typed resource class, for looking up localized strings, etc.
     Threadsafety:
         This class is fully thread-safe.
-    """
+    """  # noqa: D205
 
     MSG_SERVICE_ARGUMENT_NULL: str = (
         "The '%s' service parameter was not specified for the '%s' service call"

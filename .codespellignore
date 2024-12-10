@@ -1,0 +1,15 @@
+/workspaces/home-assistant-core/config/custom_components/spotify/*
+/config/custom_components/spotify/*
+/config/custom_components/spotify/__init__.py
+/config/custom_components/spotify/application_credentials.py
+/config/custom_components/spotify/appmessages.py
+/config/custom_components/spotify/browse_media.py
+/config/custom_components/spotify/config_flow.py
+/config/custom_components/spotify/const.py
+/config/custom_components/spotify/instancedata_spotify.py
+/config/custom_components/spotify/manifest.json
+/config/custom_components/spotify/media_player.py
+/config/custom_components/spotify/services.yaml
+/config/custom_components/spotify/strings.json
+/config/custom_components/spotify/system_health.py
+/config/custom_components/spotify/utils.py

@@ -1,5 +1,46 @@
 # noqa: ignore=all
 
+
+"""Spotify Integration Config Flow - `config_flow.py`.
+
+This module implements the user interface configuration flow for the Spotify integration in Home Assistant. It allows
+users to set up the integration, manage OAuth2 authentication, and handle reauthentication when needed.
+
+Key Features:
+- **Config Flow Handler**:
+  - Manages the creation of configuration entries through user input, discovery, or other sources.
+  - Ensures data consistency by validating and storing configuration during the setup process.
+- **OAuth2 Authentication**:
+  - Integrates with Spotify's OAuth2 API for secure token management.
+  - Supports reauthentication for expired or invalid tokens.
+- **Reauthentication Workflow**:
+  - Prompts users to reauthenticate when an API authentication error occurs or during migration of old entries.
+- **Options Flow Support**:
+  - Allows users to configure additional options after initial setup through the integration details page.
+
+Dependencies:
+- `homeassistant.config_entries`: Provides utilities for managing configuration entries.
+- `spotifywebapipython`: Spotify Web API client for managing tokens and accessing Spotify resources.
+- `voluptuous`: Used for validating user input.
+- `SmartInspect`: Provides detailed logging and debugging capabilities.
+
+Classes:
+- `SpotifyFlowHandler`: Manages the flow of creating and handling OAuth2 authentication and configuration entries.
+- `SpotifyOptionsFlow`: Enables options flow support for configuring additional settings.
+
+Methods:
+- `async_oauth_create_entry`: Handles the creation or update of configuration entries during OAuth2 authentication.
+- `async_step_reauth`: Initiates the reauthentication process when necessary.
+- `async_step_reauth_confirm`: Displays a dialog to inform users of reauthentication requirements.
+- `async_get_options_flow`: Returns the options flow handler for this integration.
+
+Notes:
+- This module leverages Home Assistant's built-in utilities for creating configuration flows and maintaining compatibility
+with future updates.
+- SmartInspect logging provides traceability and debugging support but gracefully handles scenarios where it is not configured.
+
+"""
+
 """
 User interface config flow for Spotify integration.
 
@@ -18,17 +59,20 @@ dependencies and install the requirements of the component.
 """
 
 from __future__ import annotations
+
 from collections.abc import Mapping
 import logging
 from typing import Any
-import voluptuous as vol
 
+# get smartinspect logger reference; create a new session for this module name.
+from smartinspectpython.siauto import SIAuto, SILevel, SISession
 from spotifywebapipython import SpotifyClient
 from spotifywebapipython.models import Device, SpotifyConnectDevices
+import voluptuous as vol
 
 from homeassistant.components import zeroconf
 from homeassistant.config_entries import ConfigEntry, OptionsFlow
-from homeassistant.const import CONF_DESCRIPTION, CONF_ID, CONF_NAME, Platform
+from homeassistant.const import CONF_DESCRIPTION, CONF_ID, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import (
@@ -56,10 +100,6 @@ from .const import (
 )
 from .instancedata_spotify import InstanceDataSpotify
 
-# get smartinspect logger reference; create a new session for this module name.
-from smartinspectpython.siauto import SIAuto, SILevel, SISession, SIColors
-import logging
-
 _logsi: SISession = SIAuto.Si.GetSession(__name__)
 if _logsi == None:
     _logsi = SIAuto.Si.AddSession(__name__, True)
@@ -69,9 +109,7 @@ _logsi.SystemLogger = logging.getLogger(__name__)
 class SpotifyFlowHandler(
     config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain=DOMAIN
 ):
-    """
-    Config flow to handle Spotify OAuth2 authentication.
-    """
+    """Config flow to handle Spotify OAuth2 authentication."""
 
     DOMAIN = DOMAIN
     VERSION = 1
@@ -85,11 +123,11 @@ class SpotifyFlowHandler(
 
     @property
     def extra_authorize_data(self) -> dict[str, Any]:
-        """
-        Extra data that needs to be appended to the authorize url.
+        """Extra data that needs to be appended to the authorize url.
 
         Returns:
             A dictionary containing the extra data.
+
         """
         data: dict = {"scope": ",".join(SPOTIFY_SCOPES), "show_dialog": "true"}
 
@@ -101,8 +139,7 @@ class SpotifyFlowHandler(
         return data
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
-        """
-        Create an oauth config entry or update existing entry for reauth.
+        """Create an oauth config entry or update existing entry for reauth.
 
         Args:
             data (dict):
@@ -110,6 +147,7 @@ class SpotifyFlowHandler(
 
         Returns:
             A `FlowResult` object that indicates the flow result.
+
         """
         try:
             # trace.
@@ -232,8 +270,7 @@ class SpotifyFlowHandler(
             _logsi.LeaveMethod(SILevel.Debug)
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
-        """
-        Perform reauth upon an API authentication error or migration of old entries.
+        """Perform reauth upon an API authentication error or migration of old entries.
 
         Args:
             entry_data (dict|None):
@@ -241,6 +278,7 @@ class SpotifyFlowHandler(
 
         Returns:
             A `FlowResult` object that indicates the flow result.
+
         """
         try:
             # trace.
@@ -281,8 +319,7 @@ class SpotifyFlowHandler(
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """
-        Dialog that informs the user that reauth is required.
+        """Dialog that informs the user that reauth is required.
 
         Args:
             user_input (dict|None):
@@ -291,6 +328,7 @@ class SpotifyFlowHandler(
 
         Returns:
             A `FlowResult` object that indicates the flow result.
+
         """
         try:
             # trace.
@@ -352,8 +390,7 @@ class SpotifyFlowHandler(
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """
-        Get the options flow for this handler, which enables options support.
+        """Get the options flow for this handler, which enables options support.
 
         This method is invoked when a user clicks the "Configure" button from the integration
         details page of the UI.
@@ -362,8 +399,7 @@ class SpotifyFlowHandler(
 
 
 class SpotifyOptionsFlow(OptionsFlow):
-    """
-    Handles options flow for the component.
+    """Handles options flow for the component.
 
     The options flow allows a user to configure additional options for the component at any time by
     navigating to the integrations page and clicking the Options button on the card for your component.
@@ -372,9 +408,7 @@ class SpotifyOptionsFlow(OptionsFlow):
     """
 
     def __init__(self, entry: ConfigEntry) -> None:
-        """
-        Initialize options flow.
-        """
+        """Initialize options flow."""
         try:
             # trace.
             _logsi.EnterMethod(SILevel.Debug)
@@ -415,8 +449,7 @@ class SpotifyOptionsFlow(OptionsFlow):
             _logsi.LeaveMethod(SILevel.Debug)
 
     async def async_step_init(self, user_input: dict[str, Any] = None) -> FlowResult:
-        """
-        Manage the options for the custom component.
+        """Manage the options for the custom component.
 
         Args:
             user_input (dict[str,Any]):
@@ -435,6 +468,7 @@ class SpotifyOptionsFlow(OptionsFlow):
         is assigned to the data area.  All you need to do is assign a reference to the
         "entry:ConfigEntry" in the "__init__" in order to access it.  This saves you from
         instantiating a new instance of the client to retrieve settings.
+
         """
         errors: dict[str, str] = {}
 
@@ -452,32 +486,32 @@ class SpotifyOptionsFlow(OptionsFlow):
             if user_input is not None:
                 # update config entry options from user input values.
                 self._Options[CONF_OPTION_DEVICE_DEFAULT] = user_input.get(
-                    CONF_OPTION_DEVICE_DEFAULT, None
+                    CONF_OPTION_DEVICE_DEFAULT
                 )
                 self._Options[CONF_OPTION_DEVICE_LOGINID] = user_input.get(
-                    CONF_OPTION_DEVICE_LOGINID, None
+                    CONF_OPTION_DEVICE_LOGINID
                 )
                 self._Options[CONF_OPTION_DEVICE_USERNAME] = user_input.get(
-                    CONF_OPTION_DEVICE_USERNAME, None
+                    CONF_OPTION_DEVICE_USERNAME
                 )
                 self._Options[CONF_OPTION_DEVICE_PASSWORD] = user_input.get(
-                    CONF_OPTION_DEVICE_PASSWORD, None
+                    CONF_OPTION_DEVICE_PASSWORD
                 )
                 self._Options[CONF_OPTION_SCRIPT_TURN_OFF] = user_input.get(
-                    CONF_OPTION_SCRIPT_TURN_OFF, None
+                    CONF_OPTION_SCRIPT_TURN_OFF
                 )
                 self._Options[CONF_OPTION_SCRIPT_TURN_ON] = user_input.get(
-                    CONF_OPTION_SCRIPT_TURN_ON, None
+                    CONF_OPTION_SCRIPT_TURN_ON
                 )
                 self._Options[CONF_OPTION_SOURCE_LIST_HIDE] = user_input.get(
-                    CONF_OPTION_SOURCE_LIST_HIDE, None
+                    CONF_OPTION_SOURCE_LIST_HIDE
                 )
 
                 # validations.
                 # if device username was entered then device password is required.
-                deviceLoginid: str = user_input.get(CONF_OPTION_DEVICE_LOGINID, None)
-                deviceUsername: str = user_input.get(CONF_OPTION_DEVICE_USERNAME, None)
-                devicePassword: str = user_input.get(CONF_OPTION_DEVICE_PASSWORD, None)
+                deviceLoginid: str = user_input.get(CONF_OPTION_DEVICE_LOGINID)
+                deviceUsername: str = user_input.get(CONF_OPTION_DEVICE_USERNAME)
+                devicePassword: str = user_input.get(CONF_OPTION_DEVICE_PASSWORD)
                 if (deviceUsername is not None) and (devicePassword is None):
                     errors["base"] = "device_password_required"
                 if (deviceUsername is not None) and (deviceLoginid is None):
@@ -623,9 +657,7 @@ class SpotifyOptionsFlow(OptionsFlow):
             _logsi.LeaveMethod(SILevel.Debug)
 
     def _GetPlayerDevicesList(self) -> list:
-        """
-        Retrieves Spotify Connect device list from the Spotify Web API.
-        """
+        """Retrieves Spotify Connect device list from the Spotify Web API."""
         try:
             # trace.
             _logsi.EnterMethod(SILevel.Debug)

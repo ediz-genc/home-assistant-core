@@ -1,5 +1,57 @@
 # noqa: ignore=all
 
+"""Spotify Media Player Component - `media_player.py`
+
+This module implements support for interacting with Spotify Connect in Home Assistant, allowing users to control
+Spotify playback, browse media, and manage devices through the media player interface.
+
+Key Features:
+- **Media Player Entity**:
+  - Integrates Spotify Connect as a `MediaPlayerEntity` in Home Assistant.
+  - Supports standard media player features, such as play, pause, seek, and volume control.
+- **Media Browsing**:
+  - Provides methods for browsing Spotify media libraries, playlists, and tracks.
+  - Integrates with the `browse_media` module for hierarchical media representation.
+- **Spotify Connect Integration**:
+  - Interfaces with Spotify's Web API and Connect features to manage playback and devices.
+  - Includes a decorator (`spotify_exception_handler`) for robust error handling during API calls.
+- **Custom Scan Intervals**:
+  - Defines different scan intervals for player updates based on activity, such as track changes or commands.
+- **Sonos Support**:
+  - Includes specialized logic for handling Sonos devices in conjunction with Spotify Connect.
+
+Attributes:
+- `SCAN_INTERVAL`: Frequency for Home Assistant to poll status updates.
+- `SPOTIFY_SCAN_INTERVAL`: Frequency for scanning Spotify Connect players for updates.
+- `SPOTIFY_SCAN_INTERVAL_TRACK_ENDSTART`: Shortened interval for tracking song transitions.
+- `SPOTIFY_SCAN_INTERVAL_COMMAND`: Interval for handling commands to Spotify players.
+- `REPEAT_MODE_MAPPING_TO_HA` and `REPEAT_MODE_MAPPING_TO_SPOTIFY`: Mappings between Spotify and Home Assistant repeat modes.
+
+Classes and Decorators:
+- `SpotifyMediaPlayer`: The primary entity class for Spotify media players.
+- `spotify_exception_handler`: A decorator to handle Spotify API exceptions and ensure player state availability.
+
+Setup Methods:
+- `async_setup_entry`: Sets up the Spotify media player based on a Home Assistant configuration entry. Initializes entities
+and stores references for later use.
+
+Dependencies:
+- `spotifywebapipython`: Provides API interaction for Spotify Connect devices and media.
+- `homeassistant.components.media_player`: Offers base classes and methods for media player entities.
+- `smartinspectpython`: Enables detailed logging for tracing and debugging.
+
+Usage:
+This component is designed to be initialized during the Spotify integration's setup process, enabling seamless control of
+Spotify Connect devices from within Home Assistant.
+
+Notes:
+- Proper handling of Home Assistant state updates is critical. Use `async_write_ha_state()` for async methods and
+`schedule_update_ha_state()` for synchronous methods.
+- Scan intervals are carefully chosen to optimize responsiveness without excessive polling.
+- Includes advanced exception handling to provide clear error messages and ensure stability during API interactions.
+
+"""
+
 """Support for interacting with Spotify Connect."""
 
 # Important notes about HA State writes:
@@ -12,29 +64,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import datetime as dt
+from datetime import datetime, timedelta
 import time
+from typing import Any, Concatenate, ParamSpec, TypeVar
 import urllib.parse
-from datetime import timedelta, datetime
-from typing import Any, Callable, Concatenate, ParamSpec, TypeVar, Tuple
-from yarl import URL
 
-from soco import (
-    SoCo,
+# get smartinspect logger reference; create a new session for this module name.
+from smartinspectpython.siauto import (
+    SIAuto,
+    SILevel,
+    SIMethodParmListContext,
+    SISession,
 )
-from soco.core import (
-    PLAY_MODE_BY_MEANING as SONOS_PLAY_MODE_BY_MEANING,
-    PLAY_MODES as SONOS_PLAY_MODES,
-)
+from soco import SoCo
+from soco.core import PLAY_MODE_BY_MEANING as SONOS_PLAY_MODE_BY_MEANING
 from soco.plugins.sharelink import ShareLinkPlugin
-
 from spotifywebapipython import (
+    SpotifyApiError,
     SpotifyClient,
     SpotifyDiscovery,
-    SpotifyApiError,
     SpotifyWebApiError,
 )
-from spotifywebapipython.zeroconfapi import *
 from spotifywebapipython.models import (
     Album,
     AlbumPageSaved,
@@ -67,13 +119,15 @@ from spotifywebapipython.models import (
     SpotifyConnectDevice,
     SpotifyConnectDevices,
     Track,
-    TrackRecommendations,
-    TrackSaved,
     TrackPage,
     TrackPageSaved,
     TrackPageSimplified,
+    TrackRecommendations,
+    TrackSaved,
     UserProfile,
 )
+from spotifywebapipython.zeroconfapi import *
+from yarl import URL
 
 from homeassistant.components.media_player import (
     ATTR_MEDIA_ENQUEUE,
@@ -97,33 +151,19 @@ from homeassistant.util.dt import utcnow
 
 from .appmessages import STAppMessages
 from .browse_media import (
-    async_browse_media_library_index,
-    BrowsableMedia,
-    browse_media_node,
     PLAYABLE_MEDIA_TYPES,
     SPOTIFY_LIBRARY_MAP,
+    BrowsableMedia,
+    async_browse_media_library_index,
+    browse_media_node,
 )
+from .const import DOMAIN, DOMAIN_SCRIPT, LOGGER, TRACE_MSG_DELAY_DEVICE_SONOS
 from .instancedata_spotify import InstanceDataSpotify
-from .const import (
-    DOMAIN,
-    DOMAIN_SCRIPT,
-    LOGGER,
-    TRACE_MSG_DELAY_DEVICE_SONOS,
-)
 from .utils import (
     passwordMaskString,
     positionHMS_fromMilliSeconds,
     positionHMS_fromSeconds,
     validateDelay,
-)
-
-# get smartinspect logger reference; create a new session for this module name.
-from smartinspectpython.siauto import (
-    SIAuto,
-    SILevel,
-    SISession,
-    SIMethodParmListContext,
-    SIColors,
 )
 
 _logsi: SISession = SIAuto.Si.GetSession(__name__)
@@ -214,8 +254,7 @@ REPEAT_MODE_MAPPING_TO_SPOTIFY = {
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """
-    Set up the media player based on a config entry.
+    """Set up the media player based on a config entry.
 
     Args:
         hass (HomeAssistant):
@@ -228,6 +267,7 @@ async def async_setup_entry(
 
     This function is called as part of the __init__.async_setup_entry event flow,
     which was initiated via the `hass.config_entries.async_forward_entry_setup` call.
+
     """
     try:
         # trace.
@@ -283,8 +323,7 @@ async def async_setup_entry(
 def spotify_exception_handler(
     func: Callable[Concatenate[_SpotifyMediaPlayerT, _P], _R],
 ) -> Callable[Concatenate[_SpotifyMediaPlayerT, _P], _R | None]:
-    """
-    Decorate SpotifyClient calls to handle Spotify exception.
+    """Decorate SpotifyClient calls to handle Spotify exception.
 
     A decorator that wraps the passed in function, catches Spotify errors,
     aiohttp exceptions and handles the availability of the media player.
@@ -337,18 +376,16 @@ def spotify_exception_handler(
 
 
 class SpotifyMediaPlayer(MediaPlayerEntity):
-    """
-    Representation of a Spotify media player device.
-    """
+    """Representation of a Spotify media player device."""
 
     def __init__(self, data: InstanceDataSpotify) -> None:
-        """
-        Initializes a new instance of the Spotify media player entity class.
+        """Initializes a new instance of the Spotify media player entity class.
 
         Args:
             data (InstanceDataSpotify):
                 The media player entity instance data parameters that were created
                 in the `__init__.async_setup_entry` method.
+
         """
         methodParms: SIMethodParmListContext = None
 
@@ -573,8 +610,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
 
     @property
     def media_position_updated_at(self) -> dt.datetime | None:
-        """
-        When was the position of the current playing media valid.
+        """When was the position of the current playing media valid.
 
         Returns value from homeassistant.util.dt.utcnow().
         """
@@ -874,9 +910,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     def play_media(
         self, media_type: MediaType | str, media_id: str, **kwargs: Any
     ) -> None:
-        """
-        Play media; called by media browser when a browsed item is selected for playing.
-        """
+        """Play media; called by media browser when a browsed item is selected for playing."""
         methodParms: SIMethodParmListContext = None
 
         try:
@@ -913,13 +947,13 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     self.data.spotifyClient.AddPlayerQueueItem(media_id)
                     return
 
-                elif enqueue == MediaPlayerEnqueue.NEXT:
+                if enqueue == MediaPlayerEnqueue.NEXT:
                     # play next request.
                     _logsi.LogVerbose("Playing next item in the player queue")
                     self.data.spotifyClient.PlayerMediaSkipNext()
                     return
 
-                elif enqueue == MediaPlayerEnqueue.PLAY:
+                if enqueue == MediaPlayerEnqueue.PLAY:
                     # play request.
                     pass  # we will handle this below.
 
@@ -1209,11 +1243,10 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     )
                     time.sleep(SONOS_COMMAND_DELAY)
 
-                else:
-                    if self._playerState.IsPlaying:
-                        self.data.spotifyClient.PlayerMediaPause(
-                            self._spotifyConnectDevice.DeviceInfo.DeviceId
-                        )
+                elif self._playerState.IsPlaying:
+                    self.data.spotifyClient.PlayerMediaPause(
+                        self._spotifyConnectDevice.DeviceInfo.DeviceId
+                    )
 
             # call script to power off device.
             self._CallScriptPower(self.data.OptionScriptTurnOff, "turn_off")
@@ -1389,7 +1422,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             )
 
             # have we reached a scan interval?
-            if not ((self._currentScanInterval % SPOTIFY_SCAN_INTERVAL) == 0):
+            if self._currentScanInterval % SPOTIFY_SCAN_INTERVAL != 0:
                 # no - decrement the current scan interval counts.
                 self._currentScanInterval = self._currentScanInterval - 1
                 if self._commandScanInterval > 0:
@@ -1534,9 +1567,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug)
 
     def to_seconds(self, timestr: str):
-        """
-        Convert an "HH:MM:SS" string value to total number of seconds.
-        """
+        """Convert an "HH:MM:SS" string value to total number of seconds."""
         if (timestr is None) or (timestr == SONOS_NOT_IMPLEMENTED):
             return 0
 
@@ -1547,9 +1578,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
 
     @callback
     def _handle_devices_update(self) -> None:
-        """
-        Handle updated data from the coordinator.
-        """
+        """Handle updated data from the coordinator."""
         if not self.enabled:
             return
 
@@ -1559,8 +1588,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     def _GetPlayerPlaybackState(
         self,
     ) -> tuple[PlayerPlayState, SpotifyConnectDevice, SoCo]:
-        """
-        Get Spotify Player Playback state and active device.
+        """Get Spotify Player Playback state and active device.
 
         Returns:
             A tuple that consists of:
@@ -1568,6 +1596,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             - A `SpotifyConnectDevice` object that contains the currently active Spotify Connect device,
               or None if no device is active.
             - A `SoCo` object that contains the current active Sonos device, or None if not a Sonos device.
+
         """
         playerState: PlayerPlayState = None
         spotifyConnectDevice: SpotifyConnectDevice = None
@@ -1663,7 +1692,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 # the "uri" value (e.g. "x-sonos-vli:RINCON_38420B909DC801400:2,spotify:e934941535d7b182815bf688490ce8a8")
                 # is not a true spotify uri value (e.g. "spotify:track:6kYyS9g4WJeRzTYqsmcMmM")
                 spotifyUri: str = sonosTrackInfo.get("uri", "")
-                didl: str = sonosTrackInfo.get("metadata", None)
+                didl: str = sonosTrackInfo.get("metadata")
                 if didl:
                     METADATA_ID: str = "x-sonos-spotify:"
                     idx: int = didl.find(METADATA_ID)
@@ -1678,7 +1707,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
 
                 # set base item properties.
                 playerState.ItemType = spotifyType
-                sTimeValue: str = sonosTrackInfo.get("position", None)
+                sTimeValue: str = sonosTrackInfo.get("position")
                 playerState._ProgressMS = (
                     self.to_seconds(sTimeValue) * 1000
                 )  # convert h:mm:ss to milliseconds
@@ -1707,7 +1736,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                         playerState._Item._Description = (
                             "Sonos device does not provide a description"
                         )
-                        sTimeValue: str = sonosTrackInfo.get("duration", None)
+                        sTimeValue: str = sonosTrackInfo.get("duration")
                         playerState._Item._DurationMS = (
                             self.to_seconds(sTimeValue) * 1000
                         )  # convert h:mm:ss to milliseconds
@@ -1784,7 +1813,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                         playerState._Item._Description = (
                             "Sonos device does not provide a description"
                         )
-                        sTimeValue: str = sonosTrackInfo.get("duration", None)
+                        sTimeValue: str = sonosTrackInfo.get("duration")
                         playerState._Item._DurationMS = (
                             self.to_seconds(sTimeValue) * 1000
                         )  # convert h:mm:ss to milliseconds
@@ -1869,9 +1898,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug)
 
     def _UpdateHAFromPlayerPlayState(self, playerPlayState: PlayerPlayState) -> None:
-        """
-        Updates all media_player attributes that have to do with now playing information.
-        """
+        """Updates all media_player attributes that have to do with now playing information."""
         try:
             # trace.
             _logsi.EnterMethod(SILevel.Debug)
@@ -2080,7 +2107,6 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     _logsi.LogVerbose(
                         "'%s': MediaPlayerState SHUFFLE_SET is not allowed" % self.name
                     )
-                pass
 
         except Exception as ex:
             _logsi.LogException(None, ex)
@@ -2091,8 +2117,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug)
 
     def _CallScriptPower(self, scriptEntityId: str, title: str) -> None:
-        """
-        Calls the supplied script for a power on / off event.
+        """Calls the supplied script for a power on / off event.
 
         Args:
             scriptEntityId (str):
@@ -2102,6 +2127,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
 
         Verifies that the script is installed, and the media player entity id
         is valid and available (not disabled).
+
         """
         entity_registry: EntityRegistry = None
 
@@ -2181,8 +2207,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     # -----------------------------------------------------------------------------------
 
     def _GetUserProfilePartialDictionary(self, userProfile: UserProfile) -> dict:
-        """
-        Returns a dictionary of a partial UserProfile object that can be returned with
+        """Returns a dictionary of a partial UserProfile object that can be returned with
         selected service results.  This allows the caller to know exactly what Spotify
         user made the given request.
         """
@@ -2201,17 +2226,18 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         deviceId: str = None,
     ) -> str:
-        """
-        Returns the Spotify defult device option if an "*" was specified for the `deviceId` argument.
+        """Returns the Spotify defult device option if an "*" was specified for the `deviceId` argument.
 
         Args:
             deviceId (str):
                 The Spotify Player device id to verify.
+
         Returns:
             One of the following values:
             - if the `deviceId` argument is not an "*", then the argument value is returned as-is.
             - otherwise, if a Spotify default device option was configured then it's deviceId value is returned.
             - otherwise, None is returned to indicate that the active player will be used.
+
         """
         if deviceId == "*":
             if self.data.OptionDeviceDefault is not None:
@@ -2241,8 +2267,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         verifyDeviceId: bool = True,
         delay: float = 0.15,
     ) -> None:
-        """
-        Add one or more items to the end of the user's current playback queue.
+        """Add one or more items to the end of the user's current playback queue.
 
         Args:
             uris (str):
@@ -2266,6 +2291,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Time delay (in seconds) to wait AFTER issuing the add request.  This delay will give the
                 Spotify web api time to process the queue change before another command is issued.
                 Default is 0.15; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_add_player_queue_items"
         apiMethodParms: SIMethodParmListContext = None
@@ -2304,8 +2330,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more albums (or the currently playing album) exists in the current
+        """Check if one or more albums (or the currently playing album) exists in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2318,6 +2343,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the ids, along with a boolean status for each that indicates
             if the album is saved (True) in the users 'Your Library' or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_album_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -2358,8 +2384,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more artists (or the currently playing artist) is followed in the current
+        """Check if one or more artists (or the currently playing artist) is followed in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2372,6 +2397,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the IDs, along with a boolean status for each that indicates
             if the user follows the ID (True) or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_artists_following"
         apiMethodParms: SIMethodParmListContext = None
@@ -2412,8 +2438,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more audiobooks (or the currently playing audiobook) exists in the current
+        """Check if one or more audiobooks (or the currently playing audiobook) exists in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2426,6 +2451,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the ids, along with a boolean status for each that indicates
             if the audiobook is saved (True) in the users 'Your Library' or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_audiobook_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -2468,8 +2494,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more episodes (or the currently playing episode) exists in the current
+        """Check if one or more episodes (or the currently playing episode) exists in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2482,6 +2507,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the ids, along with a boolean status for each that indicates
             if the episode is saved (True) in the users 'Your Library' or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_episode_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -2525,8 +2551,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         playlistId: str = None,
         userIds: str = None,
     ) -> None:
-        """
-        Check to see if the current user is following a specified playlist.
+        """Check to see if the current user is following a specified playlist.
 
         Args:
             playlistId (str):
@@ -2541,6 +2566,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             Array of boolean, containing a single boolean status that indicates
             if the user follows the playlist (True) or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_playlist_followers"
         apiMethodParms: SIMethodParmListContext = None
@@ -2588,8 +2614,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more shows (or the currently playing show) exists in the current
+        """Check if one or more shows (or the currently playing show) exists in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2602,6 +2627,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the ids, along with a boolean status for each that indicates
             if the show is saved (True) in the users 'Your Library' or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_show_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -2642,8 +2668,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Check if one or more tracks (or the currently playing track) exists in the current
+        """Check if one or more tracks (or the currently playing track) exists in the current
         user's 'Your Library' favorites.
 
         Args:
@@ -2656,6 +2681,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the ids, along with a boolean status for each that indicates
             if the track is saved (True) in the users 'Your Library' or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_track_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -2696,8 +2722,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str,
     ) -> None:
-        """
-        Check to see if the current user is following one or more users.
+        """Check to see if the current user is following one or more users.
 
         Args:
             ids (str):
@@ -2708,6 +2733,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         Returns:
             A dictionary of the IDs, along with a boolean status for each that indicates
             if the user follows the ID (True) or not (False).
+
         """
         apiMethodName: str = "service_spotify_check_users_following"
         apiMethodParms: SIMethodParmListContext = None
@@ -2748,8 +2774,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Add the current user as a follower of one or more artists.
+        """Add the current user as a follower of one or more artists.
 
         Args:
             ids (str):
@@ -2757,6 +2782,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `2CIMQHirSU0MQqyYHq0eOx,1IQ2e1buppatiN1bxUVkrk`
                 If null, the currently playing track artist uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_follow_artists"
         apiMethodParms: SIMethodParmListContext = None
@@ -2789,8 +2815,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         playlistId: str = None,
         public: bool = True,
     ) -> None:
-        """
-        Add the current user as a follower of a playlist.
+        """Add the current user as a follower of a playlist.
 
         Args:
             playlistId (str):
@@ -2801,6 +2826,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 If true the playlist will be included in user's public playlists, if false it
                 will remain private.
                 Default = True.
+
         """
         apiMethodName: str = "service_spotify_follow_playlist"
         apiMethodParms: SIMethodParmListContext = None
@@ -2833,14 +2859,14 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Add the current user as a follower of one or more users.
+        """Add the current user as a follower of one or more users.
 
         Args:
             ids (str):
                 A comma-separated list of the Spotify user IDs.
                 A maximum of 50 IDs can be sent in one request.
                 Example: `smedjan`
+
         """
         apiMethodName: str = "service_spotify_follow_users"
         apiMethodParms: SIMethodParmListContext = None
@@ -2873,8 +2899,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         albumId: str = None,
         market: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single album.
+        """Get Spotify catalog information for a single album.
 
         Args:
             albumId (str):
@@ -2894,6 +2919,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `Album` object that contains the album details.
+
         """
         apiMethodName: str = "service_spotify_get_album"
         apiMethodParms: SIMethodParmListContext = None
@@ -2939,8 +2965,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the albums saved in the current Spotify user's 'Your Library'.
+        """Get a list of the albums saved in the current Spotify user's 'Your Library'.
 
         Args:
             limit (int):
@@ -2971,6 +2996,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `AlbumPageSaved` object that contains album information.
+
         """
         apiMethodName: str = "service_spotify_get_album_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -3020,8 +3046,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of new album releases featured in Spotify.
+        """Get a list of new album releases featured in Spotify.
 
         Args:
             limit (int):
@@ -3052,6 +3077,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `AlbumPageSimplified` object that contains album information.
+
         """
         apiMethodName: str = "service_spotify_get_album_new_releases"
         apiMethodParms: SIMethodParmListContext = None
@@ -3103,8 +3129,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         market: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about an album's tracks.
+        """Get Spotify catalog information about an album's tracks.
 
         Args:
             albumId (str):
@@ -3138,6 +3163,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `TrackPageSimplified` object that contains album track information.
+
         """
         apiMethodName: str = "service_spotify_get_album_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -3183,8 +3209,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         artistId: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single artist.
+        """Get Spotify catalog information for a single artist.
 
         Args:
             artistId (str):
@@ -3196,6 +3221,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `Artist` object that contains the artist details.
+
         """
         apiMethodName: str = "service_spotify_get_artist"
         apiMethodParms: SIMethodParmListContext = None
@@ -3242,8 +3268,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get Spotify catalog information about an artist's albums.
+        """Get Spotify catalog information about an artist's albums.
 
         Args:
             artistId (str):
@@ -3282,6 +3307,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `AlbumPageSimplified` object that contains artist album information.
+
         """
         apiMethodName: str = "service_spotify_get_artist_albums"
         apiMethodParms: SIMethodParmListContext = None
@@ -3333,8 +3359,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         artistId: str,
     ) -> dict:
-        """
-        Get artist about information from the Spotify Artist Biography page for the
+        """Get artist about information from the Spotify Artist Biography page for the
         specified Spotify artist ID.
 
         Args:
@@ -3348,6 +3373,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ArtistInfo` object that contains artist album information.
+
         """
         apiMethodName: str = "service_spotify_get_artist_info"
         apiMethodParms: SIMethodParmListContext = None
@@ -3388,8 +3414,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         artistId: str,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get Spotify catalog information about artists similar to a given artist.
+        """Get Spotify catalog information about artists similar to a given artist.
         Similarity is based on analysis of the Spotify community's listening history.
 
         Args:
@@ -3406,6 +3431,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A list of `Artist` objects that contain artist information.
+
         """
         apiMethodName: str = "service_spotify_get_artist_related_artists"
         apiMethodParms: SIMethodParmListContext = None
@@ -3459,8 +3485,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         market: str = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get Spotify catalog information about an artist's top tracks by country.
+        """Get Spotify catalog information about an artist's top tracks by country.
 
         Args:
             artistId (str):
@@ -3485,6 +3510,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A list of `Track` objects of matching results.
+
         """
         apiMethodName: str = "service_spotify_get_artist_top_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -3538,8 +3564,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get the current user's followed artists.
+        """Get the current user's followed artists.
 
         Args:
             after (str):
@@ -3564,6 +3589,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ArtistPage` object that contains artist information.
+
         """
         apiMethodName: str = "service_spotify_get_artists_followed"
         apiMethodParms: SIMethodParmListContext = None
@@ -3609,8 +3635,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         audiobookId: str = None,
         market: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single audiobook.
+        """Get Spotify catalog information for a single audiobook.
 
         Audiobooks are only available within the US, UK, Canada, Ireland, New Zealand and Australia markets.
 
@@ -3633,6 +3658,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Audiobook` object that contains audiobook details.
+
         """
         apiMethodName: str = "service_spotify_get_audiobook"
         apiMethodParms: SIMethodParmListContext = None
@@ -3680,8 +3706,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         market: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about an audiobook's chapters.
+        """Get Spotify catalog information about an audiobook's chapters.
 
         Args:
             audiobookId (str):
@@ -3715,6 +3740,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `ChapterPageSimplified` object that contains simplified chapter information for the audiobook Id.
+
         """
         apiMethodName: str = "service_spotify_get_audiobook_chapters"
         apiMethodParms: SIMethodParmListContext = None
@@ -3767,8 +3793,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the audiobooks saved in the current Spotify user's 'Your Library'.
+        """Get a list of the audiobooks saved in the current Spotify user's 'Your Library'.
 
         Args:
             limit (int):
@@ -3793,6 +3818,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `AudiobookPageSimplified` object that contains saved audiobook information.
+
         """
         apiMethodName: str = "service_spotify_get_audiobook_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -3843,8 +3869,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         locale: str = None,
         refresh: str = False,
     ) -> dict:
-        """
-        Get a sorted list of ALL categories used to tag items in Spotify.
+        """Get a sorted list of ALL categories used to tag items in Spotify.
 
         Args:
             country (str):
@@ -3870,6 +3895,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `CategoryPage` object that contains the list category details.
+
         """
         apiMethodName: str = "service_spotify_get_browse_categorys_list"
         apiMethodParms: SIMethodParmListContext = None
@@ -3931,8 +3957,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of Spotify playlists tagged with a particular category.
+        """Get a list of Spotify playlists tagged with a particular category.
 
         Args:
             categoryId (str):
@@ -3966,6 +3991,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `PlaylistPageSimplified` object that contains playlist information.
             - message: string that describes what was returned (e.g. 'Popular Playlists').
+
         """
         apiMethodName: str = "service_spotify_get_category_playlists"
         apiMethodParms: SIMethodParmListContext = None
@@ -3988,7 +4014,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             # request information from Spotify Web API.
             # have to treat this one a little bit differently due to return of a Tuple[] value.
             _logsi.LogVerbose(STAppMessages.MSG_SERVICE_QUERY_WEB_API)
-            response: Tuple[PlaylistPageSimplified, str]
+            response: tuple[PlaylistPageSimplified, str]
             response = self.data.spotifyClient.GetCategoryPlaylists(
                 categoryId, limit, offset, country, limitTotal, sortResult
             )
@@ -4022,8 +4048,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         chapterId: str = None,
         market: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single audiobook chapter identified by its unique Spotify ID.
+        """Get Spotify catalog information for a single audiobook chapter identified by its unique Spotify ID.
 
         Args:
             chapterId (str):
@@ -4044,6 +4069,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Chapter` object that contain the chapter details.
+
         """
         apiMethodName: str = "service_spotify_get_chapter"
         apiMethodParms: SIMethodParmListContext = None
@@ -4086,8 +4112,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         episodeId: str = None,
         market: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single episode identified by its unique Spotify ID.
+        """Get Spotify catalog information for a single episode identified by its unique Spotify ID.
 
         Args:
             episodeId (str):
@@ -4108,6 +4133,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Episode` object that contain the episode details.
+
         """
         apiMethodName: str = "service_spotify_get_episode"
         apiMethodParms: SIMethodParmListContext = None
@@ -4152,8 +4178,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the episodes saved in the current Spotify user's 'Your Library'.
+        """Get a list of the episodes saved in the current Spotify user's 'Your Library'.
 
         Args:
             limit (int):
@@ -4178,6 +4203,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `EpisodePageSaved` object that contains saved audiobook information.
+
         """
         apiMethodName: str = "service_spotify_get_episode_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -4228,8 +4254,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of Spotify featured playlists (shown, for example, on a Spotify player's 'Browse' tab).
+        """Get a list of Spotify featured playlists (shown, for example, on a Spotify player's 'Browse' tab).
 
         Args:
             limit (int):
@@ -4278,6 +4303,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `PlaylistPageSimplified` object that contains playlist information.
             - message: string that describes what was returned (e.g. 'Popular Playlists').
+
         """
         apiMethodName: str = "service_spotify_get_featured_playlists"
         apiMethodParms: SIMethodParmListContext = None
@@ -4301,7 +4327,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             # request information from Spotify Web API.
             # have to treat this one a little bit differently due to return of a Tuple[] value.
             _logsi.LogVerbose(STAppMessages.MSG_SERVICE_QUERY_WEB_API)
-            response: Tuple[PlaylistPageSimplified, str]
+            response: tuple[PlaylistPageSimplified, str]
             response = self.data.spotifyClient.GetFeaturedPlaylists(
                 limit, offset, country, locale, timestamp, limitTotal, sortResult
             )
@@ -4335,8 +4361,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         refresh: bool = True,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get information about a user's available Spotify Connect player devices.
+        """Get information about a user's available Spotify Connect player devices.
 
         Some device models are not supported and will not be listed in the API response.
 
@@ -4355,6 +4380,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A list of `Device` objects that contain the device details, sorted by name.
+
         """
         apiMethodName: str = "service_spotify_get_player_devices"
         apiMethodParms: SIMethodParmListContext = None
@@ -4401,8 +4427,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     def service_spotify_get_player_now_playing(
         self, market: str = None, additionalTypes: str = None
     ) -> dict:
-        """
-        Get the object currently being played on the user's Spotify account.
+        """Get the object currently being played on the user's Spotify account.
 
         This method requires the `user-read-currently-playing` scope.
 
@@ -4427,6 +4452,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlayerPlayState` object that contains the player now playing details.
+
         """
         apiMethodName: str = "service_spotify_get_player_now_playing"
         apiMethodParms: SIMethodParmListContext = None
@@ -4471,8 +4497,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     def service_spotify_get_player_playback_state(
         self, market: str = None, additionalTypes: str = None
     ) -> dict:
-        """
-        Get information about the user's current playback state, including track or episode, progress,
+        """Get information about the user's current playback state, including track or episode, progress,
         and active device.
 
         This method requires the `user-read-playback-state` scope.
@@ -4498,6 +4523,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlayerPlayState` object that contains the playback state details.
+
         """
         apiMethodName: str = "service_spotify_get_player_playback_state"
         apiMethodParms: SIMethodParmListContext = None
@@ -4540,8 +4566,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug, apiMethodName)
 
     def service_spotify_get_player_queue_info(self) -> dict:
-        """
-        Get the list of objects that make up the user's playback queue.
+        """Get the list of objects that make up the user's playback queue.
 
         This method requires the `user-read-currently-playing` and `user-read-playback-state` scope.
 
@@ -4549,6 +4574,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlayerQueueInfo` object that contains the player queue information.
+
         """
         apiMethodName: str = "service_spotify_get_player_queue_info"
         apiMethodParms: SIMethodParmListContext = None
@@ -4587,8 +4613,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
     def service_spotify_get_player_recent_tracks(
         self, limit: int = 20, after: int = 0, before: int = 0, limitTotal: int = None
     ) -> dict:
-        """
-        Get tracks from the current user's recently played tracks.
+        """Get tracks from the current user's recently played tracks.
         Note: Currently doesn't support podcast episodes.
 
         This method requires the `user-read-recently-played` scope.
@@ -4623,6 +4648,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlayHistoryPage` object that contains the playlist details.
+
         """
         apiMethodName: str = "service_spotify_get_player_recent_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -4673,8 +4699,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         fields: str = None,
         additionalTypes: str = None,
     ) -> dict:
-        """
-        Get a playlist owned by a Spotify user.
+        """Get a playlist owned by a Spotify user.
 
         Args:
             playlistId (str):
@@ -4698,6 +4723,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Playlist` object that contains the playlist details.
+
         """
         apiMethodName: str = "service_spotify_get_playlist"
         apiMethodParms: SIMethodParmListContext = None
@@ -4743,8 +4769,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         playlistId: str = None,
     ) -> dict:
-        """
-        Get the current image associated with a specific playlist.
+        """Get the current image associated with a specific playlist.
 
         Args:
             playlistId (str):
@@ -4756,6 +4781,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ImageObject` object that contains the playlist cover image details.
+
         """
         apiMethodName: str = "service_spotify_get_playlist_cover_image"
         apiMethodParms: SIMethodParmListContext = None
@@ -4801,8 +4827,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the playlists owned or followed by the current Spotify user.
+        """Get a list of the playlists owned or followed by the current Spotify user.
 
         Args:
             limit (int):
@@ -4827,6 +4852,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlaylistPageSimplified` object that contains playlist information.
+
         """
         apiMethodName: str = "service_spotify_get_playlist_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -4881,8 +4907,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         additionalTypes: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get full details of the items of a playlist owned by a Spotify user.
+        """Get full details of the items of a playlist owned by a Spotify user.
 
         Args:
             playlistId (str):
@@ -4936,6 +4961,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlaylistPage` object that contains playlist information.
+
         """
         apiMethodName: str = "service_spotify_get_playlist_items"
         apiMethodParms: SIMethodParmListContext = None
@@ -4987,8 +5013,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the playlists owned or followed by the current Spotify user.
+        """Get a list of the playlists owned or followed by the current Spotify user.
 
         Args:
             userId (str):
@@ -5016,6 +5041,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlaylistPageSimplified` object that contains user playlist information.
+
         """
         apiMethodName: str = "service_spotify_get_playlists_for_user"
         apiMethodParms: SIMethodParmListContext = None
@@ -5066,8 +5092,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         showId: str = None,
         market: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single show identified by its unique Spotify ID.
+        """Get Spotify catalog information for a single show identified by its unique Spotify ID.
 
         Args:
             showId (str):
@@ -5085,6 +5110,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Show` object that contain the show details.
+
         """
         apiMethodName: str = "service_spotify_get_show"
         apiMethodParms: SIMethodParmListContext = None
@@ -5130,8 +5156,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         market: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about a show's episodes.
+        """Get Spotify catalog information about a show's episodes.
 
         Args:
             showId (str):
@@ -5163,6 +5188,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `EpisodePageSimplified` object that contains the show episodes.
+
         """
         apiMethodName: str = "service_spotify_get_show_episodes"
         apiMethodParms: SIMethodParmListContext = None
@@ -5213,8 +5239,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         sortResult: bool = True,
         excludeAudiobooks: bool = True,
     ) -> dict:
-        """
-        Get a list of the shows saved in the current Spotify user's 'Your Library'.
+        """Get a list of the shows saved in the current Spotify user's 'Your Library'.
 
         Args:
             limit (int):
@@ -5248,6 +5273,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `ShowPageSaved` object that contains playlist information.
+
         """
         apiMethodName: str = "service_spotify_get_show_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -5298,8 +5324,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         activateDevice: bool = True,
         delay: float = 0.25,
     ) -> dict:
-        """
-        Get information about a specific Spotify Connect player device, and (optionally)
+        """Get information about a specific Spotify Connect player device, and (optionally)
         activate the device if it requires it.
 
         This method requires the `user-read-playback-state` scope.
@@ -5336,6 +5361,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `SpotifyConnectDevice` object that contains the device details.
+
         """
         apiMethodName: str = "service_spotify_get_spotify_connect_device"
         apiMethodParms: SIMethodParmListContext = None
@@ -5396,8 +5422,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         refresh: bool = True,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get information about all available Spotify Connect player devices.
+        """Get information about all available Spotify Connect player devices.
 
         This method requires the `user-read-playback-state` scope.
 
@@ -5414,6 +5439,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `SpotifyConnectDevices` object that contain the device details.
+
         """
         apiMethodName: str = "service_spotify_get_spotify_connect_devices"
         apiMethodParms: SIMethodParmListContext = None
@@ -5459,8 +5485,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         trackId: str = None,
     ) -> dict:
-        """
-        Get Spotify catalog information for a single track identified by its unique Spotify ID.
+        """Get Spotify catalog information for a single track identified by its unique Spotify ID.
 
         Args:
             trackId (str):
@@ -5473,6 +5498,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Track` object that contain the track details.
+
         """
         apiMethodName: str = "service_spotify_get_track"
         apiMethodParms: SIMethodParmListContext = None
@@ -5517,8 +5543,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get a list of the tracks saved in the current Spotify user's 'Your Library'.
+        """Get a list of the tracks saved in the current Spotify user's 'Your Library'.
 
         Args:
             limit (int):
@@ -5549,6 +5574,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `TrackPageSaved` object that contains track favorites.
+
         """
         apiMethodName: str = "service_spotify_get_track_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -5641,8 +5667,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         maxValence: float = None,
         targetValence: float = None,
     ) -> dict:
-        """
-        Get track recommendations for specified criteria.
+        """Get track recommendations for specified criteria.
 
         Args:
             limit (int):
@@ -5791,6 +5816,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `TrackRecommendations` object that contains track information.
+
         """
         apiMethodName: str = "service_spotify_get_track_recommendations"
         apiMethodParms: SIMethodParmListContext = None
@@ -6028,8 +6054,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str,
     ) -> dict:
-        """
-        Get audio features for multiple tracks based on their Spotify IDs.
+        """Get audio features for multiple tracks based on their Spotify IDs.
 
         Args:
             ids (list[str]):
@@ -6041,6 +6066,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A list of `AudioFeatures` objects that contain the audio feature details.
+
         """
         apiMethodName: str = "service_spotify_get_tracks_audio_features"
         apiMethodParms: SIMethodParmListContext = None
@@ -6093,8 +6119,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get the current user's top artists based on calculated affinity.
+        """Get the current user's top artists based on calculated affinity.
 
         Args:
             timeRange (str):
@@ -6127,6 +6152,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ArtistPage` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_get_users_top_artists"
         apiMethodParms: SIMethodParmListContext = None
@@ -6176,8 +6202,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         limitTotal: int = None,
         sortResult: bool = True,
     ) -> dict:
-        """
-        Get the current user's top tracks based on calculated affinity.
+        """Get the current user's top tracks based on calculated affinity.
 
         Args:
             timeRange (str):
@@ -6210,6 +6235,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `TrackPage` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_get_users_top_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -6256,8 +6282,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         verifyUserContext: bool = False,
         delay: float = 0.50,
     ) -> dict:
-        """
-        Activates all Spotify Connect player devices, and (optionally) switches the active user
+        """Activates all Spotify Connect player devices, and (optionally) switches the active user
         context to the current user context for each device.
 
         Args:
@@ -6271,6 +6296,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the device list change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_activate_devices"
         apiMethodParms: SIMethodParmListContext = None
@@ -6319,8 +6345,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Pause media play for the specified Spotify Connect device.
+        """Pause media play for the specified Spotify Connect device.
 
         Args:
             deviceId (str):
@@ -6333,6 +6358,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_pause"
         apiMethodParms: SIMethodParmListContext = None
@@ -6423,8 +6449,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Start playing one or more tracks of the specified context on a Spotify Connect device.
+        """Start playing one or more tracks of the specified context on a Spotify Connect device.
 
         Args:
             contextUri (str):
@@ -6459,6 +6484,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_play_context"
         apiMethodParms: SIMethodParmListContext = None
@@ -6535,7 +6561,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     arrUris = contextUri
                 else:
                     arrUris = contextUri.split(",")
-                    for idx in range(0, len(arrUris)):
+                    for idx in range(len(arrUris)):
                         arrUris[idx] = arrUris[idx].strip()
 
                 # for Sonos, use the SoCo API command.
@@ -6631,8 +6657,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         resolveDeviceId: bool = True,
         limitTotal: int = None,
     ) -> None:
-        """
-        Start playing one or more tracks on the specified Spotify Connect device.
+        """Start playing one or more tracks on the specified Spotify Connect device.
 
         Args:
             deviceId (str):
@@ -6653,6 +6678,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             limitTotal (int):
                 The maximum number of items to retrieve from favorites.
                 Default: 200.
+
         """
         apiMethodName: str = "service_spotify_player_media_play_track_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -6790,8 +6816,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Start playing one or more tracks on the specified Spotify Connect device.
+        """Start playing one or more tracks on the specified Spotify Connect device.
 
         Args:
             uris (str):
@@ -6815,6 +6840,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_play_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -6865,7 +6891,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     arrUris = uris
                 else:
                     arrUris = uris.split(",")
-                    for idx in range(0, len(arrUris)):
+                    for idx in range(len(arrUris)):
                         arrUris[idx] = arrUris[idx].strip()
 
                 # for Sonos, use the SoCo API command.
@@ -6957,8 +6983,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Resume media play for the specified Spotify Connect device.
+        """Resume media play for the specified Spotify Connect device.
 
         Args:
             deviceId (str):
@@ -6971,6 +6996,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_resume"
         apiMethodParms: SIMethodParmListContext = None
@@ -7059,8 +7085,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         delay: float = 0.50,
         relativePositionMS: int = 0,
     ) -> None:
-        """
-        Seeks to the given absolute or relative position in the user's currently playing track
+        """Seeks to the given absolute or relative position in the user's currently playing track
         for the specified Spotify Connect device.
 
         Args:
@@ -7083,6 +7108,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 The relative position in milliseconds to seek to; can be a positive or negative number.
                 Example = `-10000` to seek behind by 10 seconds.
                 Example = `10000` to seek ahead by 10 seconds.
+
         """
         apiMethodName: str = "service_spotify_player_media_seek"
         apiMethodParms: SIMethodParmListContext = None
@@ -7142,8 +7168,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     if (newPositionMS is not None) and (newPositionMS > 0):
                         # calculate new position; if less than zero, then force it to zero.
                         newPositionMS += relativePositionMS
-                        if newPositionMS < 0:
-                            newPositionMS = 0
+                        newPositionMS = max(newPositionMS, 0)
                         positionMS = newPositionMS
 
                 # for Sonos, use the SoCo API command.
@@ -7199,8 +7224,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Skips to next track in the user's queue for the specified Spotify Connect device.
+        """Skips to next track in the user's queue for the specified Spotify Connect device.
 
         Args:
             deviceId (str):
@@ -7213,6 +7237,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_skip_next"
         apiMethodParms: SIMethodParmListContext = None
@@ -7301,8 +7326,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Skips to previous track in the user's queue for the specified Spotify Connect device.
+        """Skips to previous track in the user's queue for the specified Spotify Connect device.
 
         Args:
             deviceId (str):
@@ -7315,6 +7339,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_media_skip_previous"
         apiMethodParms: SIMethodParmListContext = None
@@ -7403,8 +7428,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         verifyUserContext: bool = True,
         verifyTimeout: float = 5.0,
     ) -> dict:
-        """
-        Resolves a Spotify Connect device identifier from a specified device id, name, alias id,
+        """Resolves a Spotify Connect device identifier from a specified device id, name, alias id,
         or alias name.  This will ensure that the device id can be found on the network, as well
         as connect to the device if necessary with the current user context.
 
@@ -7421,6 +7445,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Connect device list.  This value is only used if a Connect command has to be
                 issued to activate the device.
                 Default is 5; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_resolve_device_id"
         apiMethodParms: SIMethodParmListContext = None
@@ -7470,8 +7495,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Set repeat mode for the specified Spotify Connect device.
+        """Set repeat mode for the specified Spotify Connect device.
 
         Args:
             state (str):
@@ -7490,6 +7514,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_set_repeat_mode"
         apiMethodParms: SIMethodParmListContext = None
@@ -7594,8 +7619,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Set shuffle mode for the specified Spotify Connect device.
+        """Set shuffle mode for the specified Spotify Connect device.
 
         Args:
             state (bool):
@@ -7613,6 +7637,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_set_shuffle_mode"
         apiMethodParms: SIMethodParmListContext = None
@@ -7718,8 +7743,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         deviceId: str = None,
         delay: float = 0.50,
     ) -> None:
-        """
-        Set volume level for the specified Spotify Connect device.
+        """Set volume level for the specified Spotify Connect device.
 
         Args:
             volumeLevel (int):
@@ -7736,6 +7760,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 This delay will give the spotify web api time to process the change before
                 another command is issued.
                 Default is 0.50; value range is 0 - 10.
+
         """
         apiMethodName: str = "service_spotify_player_set_volume_level"
         apiMethodParms: SIMethodParmListContext = None
@@ -7817,8 +7842,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         refreshDeviceList: bool = True,
         forceActivateDevice: bool = True,
     ) -> None:
-        """
-        Transfer playback to a new Spotify Connect device and optionally begin playback.
+        """Transfer playback to a new Spotify Connect device and optionally begin playback.
 
         Args:
             deviceId (str):
@@ -7844,6 +7868,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 force the device to reconnect to Spotify Connect; otherwise, False to not
                 disconnect.
                 Default is True.
+
         """
         apiMethodName: str = "service_spotify_player_transfer_playback"
         apiMethodParms: SIMethodParmListContext = None
@@ -7909,12 +7934,10 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                             _logsi.LogVerbose(TRACE_MSG_DELAY_DEVICE_SONOS % delay)
                             time.sleep(delay)
 
-                    else:
-                        # for everything else, just use the Spotify Web API.
-                        if self._playerState.IsPlaying:
-                            self.data.spotifyClient.PlayerMediaPause(
-                                self._playerState.Device.Id, delay
-                            )
+                    elif self._playerState.IsPlaying:
+                        self.data.spotifyClient.PlayerMediaPause(
+                            self._playerState.Device.Id, delay
+                        )
 
                 except Exception as ex:
                     _logsi.LogException(
@@ -7997,10 +8020,10 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 # get current Sonos transport status.
                 sonosTransportInfo: dict = sonosDevice.get_current_transport_info()
                 currentTransportState: str = sonosTransportInfo.get(
-                    "current_transport_state", None
+                    "current_transport_state"
                 )
                 currentTransportStatus: str = sonosTransportInfo.get(
-                    "current_transport_status", None
+                    "current_transport_status"
                 )
                 _logsi.LogVerbose(
                     "'%s': Sonos device '%s' ('%s') current_transport_state (before activation transfer): '%s' (Status=%s)"
@@ -8267,8 +8290,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         playlistId: str,
         imagePath: str,
     ) -> None:
-        """
-        Replace the image used to represent a specific playlist.
+        """Replace the image used to represent a specific playlist.
 
         Args:
             playlistId (str):
@@ -8277,6 +8299,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             imagePath (str):
                 The fully-qualified path of the image to be uploaded.
                 The image must be in JPEG format, and cannot exceed 256KB in Base64 encoded size.
+
         """
         apiMethodName: str = "service_spotify_playlist_cover_image_add"
         apiMethodParms: SIMethodParmListContext = None
@@ -8316,8 +8339,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         collaborative: bool = False,
         imagePath: str = None,
     ) -> None:
-        """
-        Change a playlist's details (name, description, and public / private state).
+        """Change a playlist's details (name, description, and public / private state).
 
         Args:
             playlistId (str):
@@ -8339,6 +8361,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 A fully-qualified path of an image to display for the playlist.
                 The image must be in JPEG format, and cannot exceed 256KB in Base64 encoded size.
                 Specify null if you do not wish to update the existing playlist image.
+
         """
         apiMethodName: str = "service_spotify_playlist_change"
         apiMethodParms: SIMethodParmListContext = None
@@ -8382,8 +8405,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         collaborative: bool = False,
         imagePath: str = None,
     ) -> dict:
-        """
-        Create an empty playlist for a Spotify user.
+        """Create an empty playlist for a Spotify user.
 
         This method requires the `playlist-modify-public` and `playlist-modify-private` scope.
 
@@ -8417,6 +8439,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `Playlist` object that contains the playlist details.
+
         """
         apiMethodName: str = "service_spotify_playlist_create"
         apiMethodParms: SIMethodParmListContext = None
@@ -8466,8 +8489,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         uris: str,
         position: int = None,
     ) -> dict:
-        """
-        Add one or more items to a user's playlist.
+        """Add one or more items to a user's playlist.
 
         Args:
             playlistId (str):
@@ -8489,6 +8511,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A snapshot ID for the updated playlist.
+
         """
         apiMethodName: str = "service_spotify_playlist_items_add"
         apiMethodParms: SIMethodParmListContext = None
@@ -8536,8 +8559,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         playlistId: str,
     ) -> dict:
-        """
-        Removes (clears) all items from a user's playlist.
+        """Removes (clears) all items from a user's playlist.
 
         Args:
             playlistId (str):
@@ -8548,6 +8570,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A snapshot ID for the updated playlist.
+
         """
         apiMethodName: str = "service_spotify_playlist_items_clear"
         apiMethodParms: SIMethodParmListContext = None
@@ -8589,8 +8612,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         uris: str = None,
         snapshotId: str = None,
     ) -> dict:
-        """
-        Remove one or more items from a user's playlist.
+        """Remove one or more items from a user's playlist.
 
         Args:
             playlistId (str):
@@ -8612,6 +8634,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A snapshot ID for the updated playlist.
+
         """
         apiMethodName: str = "service_spotify_playlist_items_remove"
         apiMethodParms: SIMethodParmListContext = None
@@ -8659,8 +8682,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         rangeLength: int = 1,
         snapshotId: str = None,
     ) -> dict:
-        """
-        Reorder items in a user's playlist.
+        """Reorder items in a user's playlist.
 
         Args:
             playlistId (str):
@@ -8688,6 +8710,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A snapshot ID for the updated playlist.
+
         """
         apiMethodName: str = "service_spotify_playlist_items_reorder"
         apiMethodParms: SIMethodParmListContext = None
@@ -8737,8 +8760,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         playlistId: str = None,
         uris: str = None,
     ) -> dict:
-        """
-        Replace one or more items in a user's playlist. Replacing items in a playlist will
+        """Replace one or more items in a user's playlist. Replacing items in a playlist will
         overwrite its existing items.
 
         This method can also be used to clear a playlist.
@@ -8756,6 +8778,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A snapshot ID for the updated playlist.
+
         """
         apiMethodName: str = "service_spotify_playlist_items_replace"
         apiMethodParms: SIMethodParmListContext = None
@@ -8799,8 +8822,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove one or more albums from the current user's 'Your Library'.
+        """Remove one or more albums from the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -8808,6 +8830,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `6vc9OTcyd3hyzabCmsdnwE,382ObEPsp2rxGrnsizN5TX`
                 If null, the currently playing track album uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_remove_album_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -8841,8 +8864,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove one or more audiobooks from the current user's 'Your Library'.
+        """Remove one or more audiobooks from the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -8850,6 +8872,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `3PFyizE2tGCSRLusl2Qizf,7iHfbu1YPACw6oZPAFJtqe`
                 If null, the currently playing audiobook uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_remove_audiobook_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -8883,8 +8906,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove one or more episodes from the current user's 'Your Library'.
+        """Remove one or more episodes from the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -8892,6 +8914,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `3F97boSWlXi8OzuhWClZHQ,1hPX5WJY6ja6yopgVPBqm4`
                 If null, the currently playing episode uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_remove_episode_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -8925,8 +8948,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove one or more shows from the current user's 'Your Library'.
+        """Remove one or more shows from the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -8934,6 +8956,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `6kAsbP8pxwaU2kPibKTuHE,4rOoJ6Egrf8K2IrywzwOMk`
                 If null, the currently playing show uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_remove_show_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -8965,8 +8988,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove one or more tracks from the current user's 'Your Library'.
+        """Remove one or more tracks from the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -8974,6 +8996,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `1kWUud3vY5ij5r62zxpTRy,4eoYKv2kDwJS7gRGh5q6SK`
                 If null, the currently playing context uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_remove_track_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9007,8 +9030,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Save one or more albums to the current user's 'Your Library'.
+        """Save one or more albums to the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -9016,6 +9038,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `6vc9OTcyd3hyzabCmsdnwE,382ObEPsp2rxGrnsizN5TX`
                 If null, the currently playing track album uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_save_album_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9047,8 +9070,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Save one or more audiobook to the current user's 'Your Library'.
+        """Save one or more audiobook to the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -9056,6 +9078,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `3PFyizE2tGCSRLusl2Qizf,7iHfbu1YPACw6oZPAFJtqe`
                 If null, the currently playing audiobook uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_save_audiobook_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9089,8 +9112,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Save one or more episodes to the current user's 'Your Library'.
+        """Save one or more episodes to the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -9098,6 +9120,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `3F97boSWlXi8OzuhWClZHQ,1hPX5WJY6ja6yopgVPBqm4`
                 If null, the currently playing episode uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_save_episode_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9131,8 +9154,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Save one or more show to the current user's 'Your Library'.
+        """Save one or more show to the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -9140,6 +9162,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `6kAsbP8pxwaU2kPibKTuHE,4rOoJ6Egrf8K2IrywzwOMk`
                 If null, the currently playing show uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_save_show_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9171,8 +9194,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Save one or more tracks to the current user's 'Your Library'.
+        """Save one or more tracks to the current user's 'Your Library'.
 
         Args:
             ids (str):
@@ -9180,6 +9202,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `1kWUud3vY5ij5r62zxpTRy,4eoYKv2kDwJS7gRGh5q6SK`
                 If null, the currently playing context uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_save_track_favorites"
         apiMethodParms: SIMethodParmListContext = None
@@ -9216,8 +9239,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about albums that match a keyword string.
+        """Get Spotify catalog information about albums that match a keyword string.
 
         Args:
             criteria (str):
@@ -9264,6 +9286,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `AlbumPageSimplified` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_albums"
         apiMethodParms: SIMethodParmListContext = None
@@ -9316,8 +9339,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about artists that match a keyword string.
+        """Get Spotify catalog information about artists that match a keyword string.
 
         Args:
             criteria (str):
@@ -9364,6 +9386,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ArtistPage` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_artists"
         apiMethodParms: SIMethodParmListContext = None
@@ -9416,8 +9439,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about audiobooks that match a keyword string.
+        """Get Spotify catalog information about audiobooks that match a keyword string.
 
         Args:
             criteria (str):
@@ -9464,6 +9486,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `AudiobookPageSimplified` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_audiobooks"
         apiMethodParms: SIMethodParmListContext = None
@@ -9516,8 +9539,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about episodes that match a keyword string.
+        """Get Spotify catalog information about episodes that match a keyword string.
 
         Args:
             criteria (str):
@@ -9564,6 +9586,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `EpisodePageSimplified` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_episodes"
         apiMethodParms: SIMethodParmListContext = None
@@ -9616,8 +9639,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about playlists that match a keyword string.
+        """Get Spotify catalog information about playlists that match a keyword string.
 
         Args:
             criteria (str):
@@ -9664,6 +9686,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `PlaylistPageSimplified` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_playlists"
         apiMethodParms: SIMethodParmListContext = None
@@ -9716,8 +9739,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about shows (aka. podcasts) that match a keyword string.
+        """Get Spotify catalog information about shows (aka. podcasts) that match a keyword string.
 
         Args:
             criteria (str):
@@ -9764,6 +9786,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An `ShowPageSimplified` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_shows"
         apiMethodParms: SIMethodParmListContext = None
@@ -9816,8 +9839,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         includeExternal: str = None,
         limitTotal: int = None,
     ) -> dict:
-        """
-        Get Spotify catalog information about tracks that match a keyword string.
+        """Get Spotify catalog information about tracks that match a keyword string.
 
         Args:
             criteria (str):
@@ -9864,6 +9886,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `TrackPage` object of matching results.
+
         """
         apiMethodName: str = "service_spotify_search_tracks"
         apiMethodParms: SIMethodParmListContext = None
@@ -9911,8 +9934,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove the current user as a follower of one or more artists.
+        """Remove the current user as a follower of one or more artists.
 
         Args:
             ids (str):
@@ -9920,6 +9942,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 Maximum: 50 IDs.
                 Example: `2CIMQHirSU0MQqyYHq0eOx,1IQ2e1buppatiN1bxUVkrk`
                 If null, the currently playing track artist uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_unfollow_artists"
         apiMethodParms: SIMethodParmListContext = None
@@ -9951,14 +9974,14 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         playlistId: str = None,
     ) -> None:
-        """
-        Remove the current user as a follower of a playlist.
+        """Remove the current user as a follower of a playlist.
 
         Args:
             playlistId (str):
                 The Spotify ID of the playlist.
                 Example: `3cEYpjA9oz9GiPac4AsH4n`
                 If null, the currently playing playlist uri id value is used.
+
         """
         apiMethodName: str = "service_spotify_unfollow_playlist"
         apiMethodParms: SIMethodParmListContext = None
@@ -9990,14 +10013,14 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         ids: str = None,
     ) -> None:
-        """
-        Remove the current user as a follower of one or more users.
+        """Remove the current user as a follower of one or more users.
 
         Args:
             ids (str):
                 A comma-separated list of Spotify user IDs.
                 A maximum of 50 IDs can be sent in one request.
                 Example: `smedjan`
+
         """
         apiMethodName: str = "service_spotify_unfollow_users"
         apiMethodParms: SIMethodParmListContext = None
@@ -10039,8 +10062,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         verifyDeviceListEntry: bool = False,
         delay: float = 0.50,
     ) -> dict:
-        """
-        Calls the `addUser` Spotify Zeroconf API endpoint to issue a call to SpConnectionLoginBlob.  If successful,
+        """Calls the `addUser` Spotify Zeroconf API endpoint to issue a call to SpConnectionLoginBlob.  If successful,
         the associated device id is added to the Spotify Connect active device list for the specified user account.
 
         Args:
@@ -10098,6 +10120,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `ZeroconfResponse` object that contains the response.
+
         """
         apiMethodName: str = "service_spotify_zeroconf_device_connect"
         apiMethodParms: SIMethodParmListContext = None
@@ -10234,8 +10257,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         useSSL: bool = False,
         delay: float = 0.50,
     ) -> dict:
-        """
-        Calls the `resetUsers` Spotify Zeroconf API endpoint to issue a call to SpConnectionLogout.
+        """Calls the `resetUsers` Spotify Zeroconf API endpoint to issue a call to SpConnectionLogout.
         The currently logged in user (if any) will be logged out of Spotify Connect, and the
         device id removed from the active Spotify Connect device list.
 
@@ -10269,6 +10291,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `ZeroconfResponse` object that contains the response.
+
         """
         apiMethodName: str = "service_spotify_zeroconf_device_disconnect"
         apiMethodParms: SIMethodParmListContext = None
@@ -10339,8 +10362,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         version: str = "1.0",
         useSSL: bool = False,
     ) -> dict:
-        """
-        Calls the `getInfo` Spotify Zeroconf API endpoint to return information about the device.
+        """Calls the `getInfo` Spotify Zeroconf API endpoint to return information about the device.
 
         Args:
             hostIpv4Address (str):
@@ -10363,6 +10385,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: A `ZeroconfGetInfo` object that contains the response.
+
         """
         apiMethodName: str = "service_spotify_zeroconf_getinfo"
         apiMethodParms: SIMethodParmListContext = None
@@ -10428,8 +10451,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         self,
         timeout: int = 5,
     ) -> dict:
-        """
-        Discover Spotify Connect devices on the local network via the
+        """Discover Spotify Connect devices on the local network via the
         ZeroConf (aka MDNS) service, and return details about each device.
 
         Args:
@@ -10442,6 +10464,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             A dictionary that contains the following keys:
             - user_profile: A (partial) user profile that retrieved the result.
             - result: An array of `ZeroconfDiscoveryResult` objects of matching results.
+
         """
         apiMethodName: str = "service_spotify_zeroconf_discover_devices"
         apiMethodParms: SIMethodParmListContext = None
@@ -10495,8 +10518,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug, apiMethodName)
 
     async def async_added_to_hass(self) -> None:
-        """
-        Run when this Entity has been added to HA.
+        """Run when this Entity has been added to HA.
 
         Importantly for a push integration, the module that will be getting updates
         needs to notify HA of changes.  In our case, we created a DataUpdateCoordinator
@@ -10527,8 +10549,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
             _logsi.LeaveMethod(SILevel.Debug)
 
     async def async_will_remove_from_hass(self) -> None:
-        """
-        Entity being removed from hass (the opposite of async_added_to_hass).
+        """Entity being removed from hass (the opposite of async_added_to_hass).
 
         Remove any registered call backs here.
         """
@@ -10548,9 +10569,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
         media_content_type: MediaType | str | None = None,
         media_content_id: str | None = None,
     ) -> BrowseMedia:
-        """
-        Implement the websocket media browsing helper.
-        """
+        """Implement the websocket media browsing helper."""
         methodParms: SIMethodParmListContext = None
 
         try:
@@ -10583,7 +10602,7 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                     media_content_id,
                 )
 
-            elif media_content_type == "favorites":
+            if media_content_type == "favorites":
                 # ignore Sonos-Card "favorites" node queries.
                 _logsi.LogVerbose(
                     "'%s': ignoring Sonos-Card favorites query (no SoundTouch equivalent)"
@@ -10603,23 +10622,22 @@ class SpotifyMediaPlayer(MediaPlayerEntity):
                 )
                 return browseMedia
 
-            else:
-                # handle spotifysplus media library selection.
-                # note that this is NOT async, as SpotifyClient is not async!
-                _logsi.LogVerbose(
-                    "'%s': MediaPlayer is browsing media node content id '%s'"
-                    % (self.name, media_content_id)
-                )
-                return await self.hass.async_add_executor_job(
-                    browse_media_node,
-                    self.hass,
-                    self.data.spotifyClient,
-                    self.name,
-                    self.source,
-                    SPOTIFY_LIBRARY_MAP,
-                    media_content_type,
-                    media_content_id,
-                )
+            # handle spotifysplus media library selection.
+            # note that this is NOT async, as SpotifyClient is not async!
+            _logsi.LogVerbose(
+                "'%s': MediaPlayer is browsing media node content id '%s'"
+                % (self.name, media_content_id)
+            )
+            return await self.hass.async_add_executor_job(
+                browse_media_node,
+                self.hass,
+                self.data.spotifyClient,
+                self.name,
+                self.source,
+                SPOTIFY_LIBRARY_MAP,
+                media_content_type,
+                media_content_id,
+            )
 
         except Exception as ex:
             # trace.

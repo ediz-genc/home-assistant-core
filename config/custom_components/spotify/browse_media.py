@@ -1,16 +1,61 @@
 # noqa: ignore=all
 
+
+"""Spotify Media Browsing Component - `browse_media.py`.
+
+This module provides support for media browsing within the Spotify integration for Home Assistant. It defines a structured
+library and methods to build and navigate through Spotify's media content, enabling users to browse playlists, albums, tracks,
+podcasts, and other categories in a hierarchical format.
+
+Key Features:
+- **Browsable Media Enum**:
+  - Defines Spotify media categories and their attributes, such as "Playlists," "Albums," and "Recently Played."
+- **Library Index Mapping**:
+  - Maps Spotify media types to metadata, including titles, images, and hierarchical relationships for browsing.
+- **Serialization/Deserialization Utilities**:
+  - Allows objects to be serialized and deserialized for efficient media content storage and retrieval.
+- **Media Browsing Methods**:
+  - `async_browse_media_library_index`: Constructs `BrowseMedia` objects for the media library's top-level index and its child nodes.
+
+Constants:
+- `BROWSE_LIMIT`: Maximum number of items to return from a Spotify Web API query.
+- `SPOTIFY_BROWSE_LIMIT_TOTAL`: Maximum items per integration request with paging.
+- `PLAYABLE_MEDIA_TYPES`: List of Spotify media types that can be played directly.
+
+Dependencies:
+- Spotify Web API Python library for fetching media content.
+- Home Assistant's `BrowseMedia` and `MediaPlayer` components for media representation.
+- SmartInspect logging for tracing and debugging.
+
+Usage:
+The `async_browse_media_library_index` function generates a hierarchical representation of Spotify's media library, including
+child nodes for subcategories. It ensures proper handling of missing or invalid data while providing detailed logs for debugging.
+
+Notes:
+- Local images referenced in the library map should exist in the `www/` directory under Home Assistant's configuration folder.
+- The SmartInspect logging integration requires proper configuration for advanced debugging, though the module gracefully
+handles its absence.
+
+"""
+
 """Support for Spotify media browsing."""
 
 from __future__ import annotations
-from functools import partial
+
+import base64
 from enum import StrEnum
 import logging
-import base64
 import os
 import pickle
 from typing import Any
 
+# get smartinspect logger reference; create a new session for this module name.
+from smartinspectpython.siauto import (
+    SIAuto,
+    SILevel,
+    SIMethodParmListContext,
+    SISession,
+)
 from spotifywebapipython import SpotifyClient
 from spotifywebapipython.models import *
 
@@ -25,15 +70,6 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
 
-# get smartinspect logger reference; create a new session for this module name.
-from smartinspectpython.siauto import (
-    SIAuto,
-    SILevel,
-    SISession,
-    SIMethodParmListContext,
-)
-import logging
-
 _logsi: SISession = SIAuto.Si.GetSession(__name__)
 if _logsi == None:
     _logsi = SIAuto.Si.AddSession(__name__, True)
@@ -45,8 +81,7 @@ MEDIA_TYPE_SHOW = "show"
 
 
 class BrowsableMedia(StrEnum):
-    """
-    Enum of browsable media.
+    """Enum of browsable media.
     Contains the library root node key value definitions.
     """
 
@@ -250,8 +285,7 @@ class UnknownMediaType(BrowseError):
 
 
 def deserialize_object(txt: str) -> object:
-    """
-    Deserialize an object from a plain text string.
+    """Deserialize an object from a plain text string.
 
     Args:
         txt (str):
@@ -259,6 +293,7 @@ def deserialize_object(txt: str) -> object:
 
     Returns:
         An object that was deserialized from a base64 string representation.
+
     """
     base64_bytes = txt.encode("ascii")
     message_bytes = base64.b64decode(base64_bytes)
@@ -268,8 +303,7 @@ def deserialize_object(txt: str) -> object:
 
 @staticmethod
 def serialize_object(obj: object) -> str:
-    """
-    Serialize an object into a plain text string.
+    """Serialize an object into a plain text string.
 
     Args:
         obj (object):
@@ -277,6 +311,7 @@ def serialize_object(obj: object) -> str:
 
     Returns:
         A serialized base64 string representation of the object.
+
     """
     message_bytes = pickle.dumps(obj)
     base64_bytes = base64.b64encode(message_bytes)
@@ -294,8 +329,7 @@ async def async_browse_media_library_index(
     media_content_type: str | None,
     media_content_id: str | None,
 ) -> BrowseMedia:
-    """
-    Builds a BrowseMedia object for the top level index page, and all of it's
+    """Builds a BrowseMedia object for the top level index page, and all of it's
     child nodes.
 
     Args:
@@ -318,6 +352,7 @@ async def async_browse_media_library_index(
         media_content_id (str):
             Selected media content id in the media browser.
             This value will be None upon the initial entry to the media browser.
+
     """
     methodParms: SIMethodParmListContext = None
 
@@ -448,8 +483,7 @@ def browse_media_node(
     media_content_type: str | None,
     media_content_id: str | None,
 ) -> BrowseMedia:
-    """
-    Builds a BrowseMedia object for a selected media content type, and all of it's
+    """Builds a BrowseMedia object for a selected media content type, and all of it's
     child nodes.
 
     Args:
@@ -470,6 +504,7 @@ def browse_media_node(
         media_content_id (str):
             Selected media content id in the media browser.
             This value will be None upon the initial entry to the media browser.
+
     """
     methodParms: SIMethodParmListContext = None
 
@@ -714,7 +749,7 @@ def browse_media_node(
                 image = None
 
         # get parent media atttributes based upon selected media content type.
-        parentAttrs: dict[str, Any] = libraryMap.get(media_content_type, None)
+        parentAttrs: dict[str, Any] = libraryMap.get(media_content_type)
         _logsi.LogDictionary(
             SILevel.Verbose,
             "'%s': BrowseMedia attributes for parent media content type: '%s'"
@@ -745,7 +780,7 @@ def browse_media_node(
             mediaType: str = parentAttrs["children"]
 
             # get child media atttributes based upon child item media content type.
-            childAttrs: dict[str, Any] = libraryMap.get(mediaType, None)
+            childAttrs: dict[str, Any] = libraryMap.get(mediaType)
             # _logsi.LogDictionary(SILevel.Verbose, "'%s': BrowseMedia attributes for child media content type: '%s'" % (playerName, mediaType), childAttrs)
 
             # set child flag indicating if media can be played or not.
