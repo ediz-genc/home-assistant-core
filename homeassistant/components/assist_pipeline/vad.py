@@ -138,6 +138,15 @@ class VoiceCommandSegmenter:
         if self.timed_out:
             self.timed_out = False
 
+        if self._handle_timeout(chunk_seconds):
+            return False
+
+        if not self.in_command:
+            return self._process_before_command(chunk_seconds, is_speech)
+        return self._process_in_command(chunk_seconds, is_speech)
+
+    def _handle_timeout(self, chunk_seconds: float) -> bool:
+        """Handle timeout logic."""
         self._timeout_seconds_left -= chunk_seconds
         if self._timeout_seconds_left <= 0:
             _LOGGER.warning(
@@ -146,7 +155,8 @@ class VoiceCommandSegmenter:
             )
             self.reset()
             self.timed_out = True
-            return False
+            return True
+        return False
 
         if speech_probability is None:
             speech_probability = 0.0
@@ -195,7 +205,25 @@ class VoiceCommandSegmenter:
                     self._silence_seconds_left = self.silence_seconds
                     self._reset_seconds_left = self.reset_seconds
 
+    def _process_silence_in_command(self, chunk_seconds: float) -> bool:
+        """Process logic when there is silence in an ongoing voice command."""
+        self._reset_seconds_left = self.reset_seconds
+        self._silence_seconds_left -= chunk_seconds
+        self._command_seconds_left -= chunk_seconds
+        if self._silence_seconds_left <= 0 and self._command_seconds_left <= 0:
+            # Command finished successfully
+            self.reset()
+            _LOGGER.debug("Voice command finished")
+            return False
         return True
+
+    def _reset_speech_in_command(self, chunk_seconds: float) -> None:
+        """Handle speech reset during an ongoing command."""
+        self._reset_seconds_left -= chunk_seconds
+        self._command_seconds_left -= chunk_seconds
+        if self._reset_seconds_left <= 0:
+            self._silence_seconds_left = self.silence_seconds
+            self._reset_seconds_left = self.reset_seconds
 
     def process_with_vad(
         self,
