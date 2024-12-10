@@ -1,0 +1,212 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  development_repo: /Users/jaylon_ho/Downloads/home-assistant-frontend/
+  # themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+panel_custom:
+  - name: spotify-panel
+    url_path: spotify
+    sidebar_title: Spotify
+    sidebar_icon: mdi:spotify
+    module_url: /local/spotify/spotify-panel.js
+
+spotcast:
+  sp_dc: !secret sp_dc
+  sp_key: !secret sp_key
+  country: SE #optional, added in 3.6.24
+
+logger:
+  default: info
+  logs:
+    homeassistant.components.cloud: debug
+
+switch:
+  - platform: template
+    switches:
+      spotify_usage:
+        value_template: "{{ is_state(states('input_text.spotify_media_player'), 'playing') }}"
+        turn_on:
+          service: media_player.play
+          target:
+            entity_id: "{{ states('input_text.spotify_media_player') }}"
+        turn_off:
+          service: media_player.media_pause
+          target:
+            entity_id: "{{ states('input_text.spotify_media_player') }}"
+
+sensor:
+  - platform: template
+    sensors:
+      spotify_volume:
+        value_template: > 
+          {{ state_attr(states('input_text.spotify_media_player'), 'volume_level') | float * 100 }}
+        friendly_name: "Spotify Volume"
+        unit_of_measurement: "%"
+  - platform: history_stats
+    name: Spotify Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+  - platform: history_stats
+    name: Spotify Weekly Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) - timedelta(days=now().weekday()) }}"
+    end: "{{ now() }}"
+  - platform: history_stats
+    name: Spotify Monthly Listening Time
+    entity_id: switch.spotify_usage
+    state: "on"
+    type: time
+    start: "{{ now().replace(day=1, hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+  - platform: template
+    sensors:
+      spotify_carbon_footprint:
+        value_template: >
+          {% set listening_time = states('sensor.spotify_listening_time') | float(0) %}
+          {% set volume = state_attr(states('input_text.spotify_media_player'), 'volume_level') | float(0) %}
+          {% set mode = states('input_select.spotify_mode') %}
+          {% set multiplier = 
+            0.02 if mode == "Relaxation" else 
+            0.03 if mode == "Gym" else 
+            0.015 if mode == "Cooking" else 
+            0.01 if mode == "Study" else 
+            0.02 %}
+          {% if listening_time > 0 %}
+            {{ ((volume + 1) * listening_time * multiplier) | round(2) }}
+          {% else %}
+            0
+          {% endif %}
+        friendly_name: "Spotify Carbon Footprint"
+        unit_of_measurement: "kg CO2"
+
+input_text:
+  spotify_device_id:
+    name: "Spotify Device ID"
+    initial: "19dcae4c19ef2bc79843c67c32880993464d8ca8"
+  spotify_media_player:
+    name: "Spotify Media Player"
+    initial: "media_player.spotify_jialong_he"
+
+input_boolean:
+  eco_mode:
+    name: "Eco Mode"
+    initial: off
+    icon: mdi:leaf-circle
+
+input_button:
+  well_being_playlist:
+    name: "Play Well-being Playlist"
+    icon: mdi:playlist-music
+
+input_select:
+  spotify_mode:
+    name: Spotify Mode
+    options:
+      - Gym
+      - Cooking
+      - Relaxation
+      - Study
+    initial: Gym
+    icon: mdi:playlist-music
+
+automation:
+  - alias: 'Disable Eco Mode: Set Spotify Volume to 1'
+    trigger:
+      platform: state
+      entity_id: input_boolean.eco_mode
+      from: "on"
+      to: "off"
+    action:
+      service: media_player.volume_set
+      target:
+        entity_id: "{{ states('input_text.spotify_media_player') }}"
+      data:
+        volume_level: 1
+  - alias: 'Enable Eco Mode: Set Spotify Volume to 0.8'
+    trigger:
+      platform: state
+      entity_id: input_boolean.eco_mode
+      from: "off"
+      to: "on"
+    action:
+      service: media_player.volume_set
+      target:
+        entity_id: "{{ states('input_text.spotify_media_player') }}"
+      data:
+        volume_level: 0.8
+  - alias: Update Spotify Media Player
+    trigger:
+      - platform: time_pattern
+        seconds: '/10'
+    action:
+      - service: homeassistant.update_entity
+        target:
+          entity_id: "{{ states('input_text.spotify_media_player') }}"
+  - alias: "Change Spotify Playlist Based on Mode"
+    description: "Switch to a specific playlist when the Spotify mode changes."
+    trigger:
+      - platform: state
+        entity_id: input_select.spotify_mode
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_select.spotify_mode
+                state: "Gym"
+            sequence:
+              - service: spotcast.start
+                data:
+                  uri: spotify:playlist:37i9dQZF1DXdxcBWuJkbcy
+                  force_playback: true
+                  spotify_device_id: "{{ states('input_text.spotify_device_id') }}"
+                  shuffle: true
+                  random_song: true
+          - conditions:
+              - condition: state
+                entity_id: input_select.spotify_mode
+                state: "Cooking"
+            sequence:
+              - service: spotcast.start
+                data:
+                  uri: spotify:playlist:37i9dQZF1EIgwQ63EuQCPo
+                  force_playback: true
+                  spotify_device_id: "{{ states('input_text.spotify_device_id') }}"
+                  shuffle: false
+                  random_song: true
+          - conditions:
+              - condition: state
+                entity_id: input_select.spotify_mode
+                state: "Relaxation"
+            sequence:
+              - service: spotcast.start
+                data:
+                  uri: spotify:playlist:37i9dQZF1DXebxttQCq0zA
+                  force_playback: true
+                  spotify_device_id: "{{ states('input_text.spotify_device_id') }}"
+                  shuffle: false
+                  random_song: true
+          - conditions:
+              - condition: state
+                entity_id: input_select.spotify_mode
+                state: "Study"
+            sequence:
+              - service: spotcast.start
+                data:
+                  uri: spotify:playlist:37i9dQZF1DX17GkScaAekA
+                  force_playback: true
+                  spotify_device_id: "{{ states('input_text.spotify_device_id') }}"
+                  shuffle: true
+                  random_song: true
