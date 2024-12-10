@@ -42,6 +42,7 @@ env:
   MYPY_CACHE_VERSION: 9
   HA_SHORT_VERSION: "2024.12"
   DEFAULT_PYTHON: "3.12"
+
   ALL_PYTHON_VERSIONS: "['3.12', '3.13']"
   # 10.3 is the oldest supported version
   # - 10.3.32 is the version currently shipped with Synology (as of 17 Feb 2022)
@@ -53,6 +54,7 @@ env:
   # - 10.11.2 is the version currently shipped with Synology (as of 11 Oct 2023)
   # mysql 8.0.32 does not always behave the same as MariaDB
   # and some queries that work on MariaDB do not work on MySQL
+
   MARIADB_VERSIONS: "['mariadb:10.3.32','mariadb:10.6.10','mariadb:10.10.3','mariadb:10.11.2','mysql:8.0.32']"
   POSTGRESQL_VERSIONS: "['postgres:12.14','postgres:15.2']"
   PRE_COMMIT_CACHE: ~/.cache/pre-commit
@@ -242,7 +244,6 @@ jobs:
           . venv/bin/activate
           pre-commit install-hooks
 
-
 # Disabled Ruff-format lint check
 # lint-ruff-format:
 #   name: Check ruff-format
@@ -283,6 +284,7 @@ jobs:
 #         pre-commit run --hook-stage manual ruff-format --all-files --show-diff-on-failure
 #       env:
 #         RUFF_OUTPUT_FORMAT: github
+
 
   lint-ruff-format:
     name: Check ruff-format
@@ -405,7 +407,6 @@ jobs:
         run: |
           . venv/bin/activate
           pre-commit run --hook-stage manual yamllint --all-files --show-diff-on-failure
-
 
 # Disabled Ruff lint check
 # lint-ruff:

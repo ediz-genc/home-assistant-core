@@ -1,4 +1,5 @@
 
+
 # Ignore everything in the config folder
 config/*
 /config

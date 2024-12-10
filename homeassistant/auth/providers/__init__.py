@@ -189,8 +189,8 @@ async def load_auth_provider_module(
     return module
 
 
-
 class LoginFlow(FlowHandler[AuthFlowContext, AuthFlowResult, tuple[str, str]]):
+
 
     """Handler for the login flow."""
 

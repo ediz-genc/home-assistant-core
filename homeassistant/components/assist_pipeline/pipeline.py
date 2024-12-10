@@ -392,6 +392,7 @@ class Pipeline:
     wake_word_id: str | None
     prefer_local_intents: bool = False
 
+
     id: str = field(default_factory=ulid_util.ulid_now)
 
     @classmethod
@@ -767,6 +768,7 @@ class PipelineRun:
                     )
                     for chunk_ts in result.queued_audio
                 )
+
 
             wake_word_output = asdict(result)
 
@@ -1413,6 +1415,7 @@ class PipelineInput:
 
             if current_stage == PipelineStage.INTENT:
                 await self._handle_intent_recognition()
+
 
             if current_stage == PipelineStage.TTS:
                 await self._handle_text_to_speech()
