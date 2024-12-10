@@ -27,11 +27,12 @@ from homeassistant.components import (
     wake_word,
     websocket_api,
 )
-from homeassistant.components.tts.media_source import (
+from homeassistant.components.tts import (
     generate_media_source_id as tts_generate_media_source_id,
 )
 from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import intent
 from homeassistant.helpers.collection import (
     CHANGE_UPDATED,
     CollectionError,
@@ -115,6 +116,7 @@ PIPELINE_FIELDS: VolDictType = {
     vol.Required("tts_voice"): vol.Any(str, None),
     vol.Required("wake_word_entity"): vol.Any(str, None),
     vol.Required("wake_word_id"): vol.Any(str, None),
+    vol.Optional("prefer_local_intents"): bool,
 }
 
 STORED_PIPELINE_RUNS = 10
@@ -310,6 +312,7 @@ async def async_update_pipeline(
     tts_voice: str | None | UndefinedType = UNDEFINED,
     wake_word_entity: str | None | UndefinedType = UNDEFINED,
     wake_word_id: str | None | UndefinedType = UNDEFINED,
+    prefer_local_intents: bool | UndefinedType = UNDEFINED,
 ) -> None:
     """Update a pipeline."""
     pipeline_data: PipelineData = hass.data[DOMAIN]
@@ -333,6 +336,7 @@ async def async_update_pipeline(
                 ("tts_voice", tts_voice),
                 ("wake_word_entity", wake_word_entity),
                 ("wake_word_id", wake_word_id),
+                ("prefer_local_intents", prefer_local_intents),
             )
             if val is not UNDEFINED
         }
@@ -379,13 +383,15 @@ class Pipeline:
     conversation_language: str
     language: Optional[str]  # noqa: UP007
     name: str
-    stt_engine: Optional[str]  # noqa: UP007
-    stt_language: Optional[str]  # noqa: UP007
-    tts_engine: Optional[str]  # noqa: UP007
-    tts_language: Optional[str]  # noqa: UP007
-    tts_voice: Optional[str]  # noqa: UP007
-    wake_word_entity: Optional[str]  # noqa: UP007
-    wake_word_id: Optional[str]  # noqa: UP007
+    stt_engine: str | None
+    stt_language: str | None
+    tts_engine: str | None
+    tts_language: str | None
+    tts_voice: str | None
+    wake_word_entity: str | None
+    wake_word_id: str | None
+    prefer_local_intents: bool = False
+
 
     id: str = field(default_factory=ulid_util.ulid_now)
 
@@ -409,6 +415,7 @@ class Pipeline:
             tts_voice=data["tts_voice"],
             wake_word_entity=data["wake_word_entity"],
             wake_word_id=data["wake_word_id"],
+            prefer_local_intents=data.get("prefer_local_intents", False),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -426,6 +433,7 @@ class Pipeline:
             "tts_voice": self.tts_voice,
             "wake_word_entity": self.wake_word_entity,
             "wake_word_id": self.wake_word_id,
+            "prefer_local_intents": self.prefer_local_intents,
         }
 
 
@@ -745,6 +753,23 @@ class PipelineRun:
                 time.monotonic()
             )
 
+            if result.queued_audio:
+                # Add audio that was pending at detection.
+                #
+                # Because detection occurs *after* the wake word was actually
+                # spoken, we need to make sure pending audio is forwarded to
+                # speech-to-text so the user does not have to pause before
+                # speaking the voice command.
+                audio_chunks_for_stt.extend(
+                    EnhancedAudioChunk(
+                        audio=chunk_ts[0],
+                        timestamp_ms=chunk_ts[1],
+                        speech_probability=None,
+                    )
+                    for chunk_ts in result.queued_audio
+                )
+
+
             wake_word_output = asdict(result)
 
             # Remove non-JSON fields
@@ -829,7 +854,7 @@ class PipelineRun:
 
             if wake_word_vad is not None:
                 chunk_seconds = (len(chunk.audio) // sample_width) / sample_rate
-                if not wake_word_vad.process(chunk_seconds, chunk.is_speech):
+                if not wake_word_vad.process(chunk_seconds, chunk.speech_probability):
                     raise WakeWordTimeoutError(
                         code="wake-word-timeout", message="Wake word was not detected"
                     )
@@ -957,7 +982,7 @@ class PipelineRun:
 
             if stt_vad is not None:
                 chunk_seconds = (len(chunk.audio) // sample_width) / sample_rate
-                if not stt_vad.process(chunk_seconds, chunk.is_speech):
+                if not stt_vad.process(chunk_seconds, chunk.speech_probability):
                     # Silence detected at the end of voice command
                     self.process_event(
                         PipelineEvent(
@@ -1016,15 +1041,58 @@ class PipelineRun:
         )
 
         try:
-            conversation_result = await conversation.async_converse(
-                hass=self.hass,
+            user_input = conversation.ConversationInput(
                 text=intent_input,
+                context=self.context,
                 conversation_id=conversation_id,
                 device_id=device_id,
-                context=self.context,
-                language=self.pipeline.conversation_language,
+                language=self.pipeline.language,
                 agent_id=self.intent_agent,
             )
+
+            # Sentence triggers override conversation agent
+            if (
+                trigger_response_text
+                := await conversation.async_handle_sentence_triggers(
+                    self.hass, user_input
+                )
+            ):
+                # Sentence trigger matched
+                trigger_response = intent.IntentResponse(
+                    self.pipeline.conversation_language
+                )
+                trigger_response.async_set_speech(trigger_response_text)
+                conversation_result = conversation.ConversationResult(
+                    response=trigger_response,
+                    conversation_id=user_input.conversation_id,
+                )
+            # Try local intents first, if preferred.
+            # Skip this step if the default agent is already used.
+            elif (
+                self.pipeline.prefer_local_intents
+                and (user_input.agent_id != conversation.HOME_ASSISTANT_AGENT)
+                and (
+                    intent_response := await conversation.async_handle_intents(
+                        self.hass, user_input
+                    )
+                )
+            ):
+                # Local intent matched
+                conversation_result = conversation.ConversationResult(
+                    response=intent_response,
+                    conversation_id=user_input.conversation_id,
+                )
+            else:
+                # Fall back to pipeline conversation agent
+                conversation_result = await conversation.async_converse(
+                    hass=self.hass,
+                    text=user_input.text,
+                    conversation_id=user_input.conversation_id,
+                    device_id=user_input.device_id,
+                    context=user_input.context,
+                    language=user_input.language,
+                    agent_id=user_input.agent_id,
+                )
         except Exception as src_error:
             _LOGGER.exception("Unexpected error during intent recognition")
             raise IntentRecognitionError(
@@ -1223,7 +1291,7 @@ class PipelineRun:
                 yield EnhancedAudioChunk(
                     audio=sub_chunk,
                     timestamp_ms=timestamp_ms,
-                    is_speech=None,  # no VAD
+                    speech_probability=None,  # no VAD
                 )
                 timestamp_ms += MS_PER_CHUNK
 
@@ -1347,6 +1415,7 @@ class PipelineInput:
 
             if current_stage == PipelineStage.INTENT:
                 await self._handle_intent_recognition()
+
 
             if current_stage == PipelineStage.TTS:
                 await self._handle_text_to_speech()

@@ -1,5 +1,10 @@
+
+
 # Ignore everything in the config folder
 config/*
+/config
+!/config/configurations.yaml
+
 config2/*
 config/custom_components/hacs
 !config/custom_components/
@@ -81,6 +86,7 @@ pytest-*.txt
 .pydevproject
 
 .python-version
+.tool-versions
 
 # emacs auto backups
 *~
