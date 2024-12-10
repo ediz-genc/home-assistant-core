@@ -1,19 +1,56 @@
 # noqa: ignore=all
 
+"""Spotify System Health Component - `system_health.py`.
+
+This module provides system health information for the Spotify integration in Home Assistant. It is designed to monitor
+and report on the integration's status, configuration, and connectivity to ensure smooth operation and assist with troubleshooting.
+
+Key Features:
+- **System Health Registration**:
+  - Registers the system health callback to display integration-specific information on the system health page in Home Assistant.
+- **Integration Information**:
+  - Reports the integration version by reading the `manifest.json` file.
+- **Client Configuration Details**:
+  - Lists the Spotify clients configured, including user profiles and associated product types.
+- **API Connectivity Check**:
+  - Verifies whether the Spotify Web API endpoint is reachable.
+- **Trace Logging**:
+  - Leverages SmartInspect logging for detailed diagnostics and traceability.
+
+Functions:
+- `async_register`: Registers the system health callback for the Spotify integration.
+- `system_health_info`: Collects and returns health information for display on the system health page.
+- `_getManifestFile`: Reads and parses the integration's `manifest.json` file to retrieve version information.
+
+Attributes:
+- `DOMAIN`: The domain identifier for the Spotify integration.
+- `InstanceDataSpotify`: Provides access to client-specific data stored in Home Assistant's data registry.
+
+Usage:
+This component is automatically invoked during the integration setup process. The collected system health information can be
+accessed via Home Assistant's system health page, offering insights into the integration's current state.
+
+Notes:
+- The `manifest.json` file must exist and be accessible in the expected path under the Home Assistant configuration directory.
+- Any exceptions during the health information gathering process are logged and raised, ensuring visibility for debugging.
+- API connectivity checks rely on Home Assistant's `system_health.async_check_can_reach_url` utility for asynchronous verification.
+
+"""
+
 """Provide info to system health."""
 
-from typing import Any
 import json
+import logging
+from typing import Any
+
+# get smartinspect logger reference; create a new session for this module name.
+from smartinspectpython.siauto import SIAuto, SILevel, SISession
 
 from homeassistant.components import system_health
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN
 from .instancedata_spotify import InstanceDataSpotify
-
-# get smartinspect logger reference; create a new session for this module name.
-from smartinspectpython.siauto import SIAuto, SILevel, SISession
-import logging
 
 _logsi: SISession = SIAuto.Si.GetSession(__name__)
 if _logsi == None:
@@ -99,8 +136,7 @@ async def system_health_info(hass):
 
 
 def _getManifestFile(filePath: str, title: str) -> str:
-    """
-    Loads the contents of the specified text file and returns them.
+    """Loads the contents of the specified text file and returns them.
 
     Args:
         filePath (str):

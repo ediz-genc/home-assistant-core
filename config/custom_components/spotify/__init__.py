@@ -1,5 +1,38 @@
 # noqa: ignore=all
 
+
+"""Home Assistant Spotify Integration - `__init__.py`.
+
+This module initializes the Spotify integration for Home Assistant, enabling interaction with Spotify's Web API and providing
+support for media playback, device management, and custom services. It integrates OAuth2 authentication, data updates, and
+logging, while supporting Home Assistant's configuration and platform standards.
+
+Key Features:
+- OAuth2-based Spotify authentication and session management.
+- Integration with Home Assistant's Media Player platform.
+- Support for Spotify's playback devices and playback states.
+- Extensive set of custom services for interacting with Spotify features, such as:
+  - Managing playlists, albums, and tracks.
+  - Following and unfollowing artists and playlists.
+  - Retrieving detailed information about users, devices, and content.
+- SmartInspect debugging integration for advanced logging and error tracking.
+
+Dependencies:
+- `spotifywebapipython` for Spotify Web API interaction.
+- `voluptuous` for configuration validation.
+- `homeassistant` core components and helpers for seamless integration.
+
+Modules and Constants:
+- `PLATFORMS`: Supported platforms for this integration.
+- `TOKEN_STATUS`: Token status management constants.
+- Multiple service schemas for validating parameters passed to custom services.
+
+Note:
+Ensure SmartInspect configuration (`smartinspect.cfg`) is properly set up if using SmartInspect logging. If not available,
+the integration will log warnings but continue to function.
+
+"""
+
 """
 The spotify integration.
 """
@@ -8,20 +41,19 @@ from __future__ import annotations
 
 from asyncio import run_coroutine_threadsafe
 from datetime import timedelta
-from typing import Any
-from urllib3._version import __version__ as urllib3_version
-
 import functools
 import logging
-import voluptuous as vol
+from typing import Any
 
 from spotifywebapipython import SpotifyClient
 from spotifywebapipython.models import Device, SpotifyConnectDevices
+from urllib3._version import __version__ as urllib3_version
+import voluptuous as vol
 
 from homeassistant.components import zeroconf
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, CONF_ID
+from homeassistant.const import CONF_ID, Platform
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -64,9 +96,9 @@ TOKEN_STATUS_REFRESH_EVENT: str = "TokenRefreshEvent"
 try:
     from smartinspectpython.siauto import (
         SIAuto,
+        SIConfigurationTimer,
         SILevel,
         SISession,
-        SIConfigurationTimer,
     )
 
     # load SmartInspect settings from a configuration settings file.
@@ -1203,8 +1235,7 @@ SERVICE_SPOTIFY_ZEROCONF_DISCOVER_DEVICES_SCHEMA = vol.Schema(
 
 
 def _trace_LogTextFile(filePath: str, title: str) -> None:
-    """
-    Log the contents of the specified text file to the SmartInspect trace log.
+    """Log the contents of the specified text file to the SmartInspect trace log.
 
     Args:
         filePath (str):
@@ -1217,8 +1248,7 @@ def _trace_LogTextFile(filePath: str, title: str) -> None:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """
-    Set up the component.
+    """Set up the component.
 
     Args:
         hass (HomeAssistant):
@@ -1232,6 +1262,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     ConfigType dictionary.  The ConfigType dictionary contains Home Assistant configuration
     entries that reference this component type: 'default_config', 'frontend' (themes, etc),
     'automation', 'script', and 'scenes' sub-dictionaries.
+
     """
     try:
         # trace.
@@ -1291,12 +1322,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             )
 
         async def service_handle_spotify_command(service: ServiceCall) -> None:
-            """
-            Handle service requests that do not return service response data from Spotify endpoints.
+            """Handle service requests that do not return service response data from Spotify endpoints.
 
             Args:
                 service (ServiceCall):
                     ServiceCall instance that contains service data (requested service name, field parameters, etc).
+
             """
             try:
                 _logsi.EnterMethod(SILevel.Debug)
@@ -1778,12 +1809,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         async def service_handle_spotify_serviceresponse(
             service: ServiceCall,
         ) -> ServiceResponse:
-            """
-            Handle service requests that return service response data from Spotify endpoints.
+            """Handle service requests that return service response data from Spotify endpoints.
 
             Args:
                 service (ServiceCall):
                     ServiceCall instance that contains service data (requested service name, field parameters, etc).
+
             """
             try:
                 _logsi.EnterMethod(SILevel.Debug)
@@ -1802,7 +1833,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 # get player instance from service parameter; if not found, then we are done.
                 entity = _GetEntityFromServiceData(hass, service, "entity_id")
                 if entity is None:
-                    return
+                    return None
 
                 response: dict = {}
 
@@ -3060,8 +3091,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         def _GetEntityFromServiceData(
             hass: HomeAssistant, service: ServiceCall, field_id: str
         ) -> MediaPlayerEntity:
-            """
-            Resolves a `MediaPlayerEntity` instance from a ServiceCall field id.
+            """Resolves a `MediaPlayerEntity` instance from a ServiceCall field id.
 
             Args:
                 hass (HomeAssistant):
@@ -3079,6 +3109,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             then an error message is logged and the return value is None.
 
             The Haas data is then queried for the entity_id to retrieve the `MediaPlayerEntity` instance.
+
             """
             # get service parameter: entity_id.
             entity_id = service.data.get(field_id)
@@ -4479,8 +4510,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """
-    Set up device instance from a config entry.
+    """Set up device instance from a config entry.
 
     Args:
         hass (HomeAssistant):
@@ -4492,6 +4522,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     The __init__.py module "async_setup_entry" method is executed for each device that is
     configured for the component.  It takes care of loading the device controller instance
     (e.g. SpotifyClient in our case) for each device that will be controlled.
+
     """
     try:
         # trace.
@@ -4552,13 +4583,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Define DataUpdateCoordinator function.
         # -----------------------------------------------------------------------------------
         async def _update_devices() -> SpotifyConnectDevices:
-            """
-            DataUpdateCoordinator update method that will retrieve the list of Spotify Connect
+            """DataUpdateCoordinator update method that will retrieve the list of Spotify Connect
             devices that are available.  This method will be executed by the DataUpdateCoordinator
             every 5 minutes to refresh the device list.
 
             Returns:
                 A `SpotifyConnectDevices` instance.
+
             """
 
             shouldUpdate: bool = True
@@ -4616,12 +4647,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Define OAuth2 Session Token Updater
         # -----------------------------------------------------------------------------------
         def _TokenUpdater() -> dict:
-            """
-            Callback function that will inform HA OAuth2 that a token needs to be refreshed.
+            """Callback function that will inform HA OAuth2 that a token needs to be refreshed.
             This method is called from SpotifyClient whenever a token needs to be refreshed.
 
             Returns:
                 A dictionaty that contains the refreshed token.
+
             """
             token: dict = None
 
@@ -4898,8 +4929,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """
-    Unloads a configuration entry.
+    """Unloads a configuration entry.
 
     Args:
         hass (HomeAssistant):
@@ -4919,6 +4949,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     Note that something changed with HA 2024.6 release that causes the `update_listeners` array
     to still contain entries; prior to this release, the `update_listeners` array was empty by this point.
+
     """
     try:
         # trace.
@@ -4973,8 +5004,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """
-    Reload config entry.
+    """Reload config entry.
 
     Args:
         hass (HomeAssistant):
@@ -4986,6 +5016,7 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     This method is called when an entry/configured device is to be reloaded. The class
     needs to unload itself, remove callbacks, and call async_setup_entry.
+
     """
     try:
         # trace.
@@ -5019,8 +5050,7 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """
-    Configuration entry update event handler.
+    """Configuration entry update event handler.
 
     Args:
         hass (HomeAssistant):
@@ -5039,6 +5069,7 @@ async def options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> No
       in this scenario, we do NOT want to reload the configuration since options have not changed; it's
       just the authentication token that is being udpated, which will occur every 1 hour (controlled by
       Spotify Web API token expiration).
+
     """
     try:
         # trace.
@@ -5077,7 +5108,7 @@ async def options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> No
                     "'%s': Component options_update_listener token data" % entry.title,
                     token,
                 )
-                status = token.get(TOKEN_STATUS, None)
+                status = token.get(TOKEN_STATUS)
                 if status == TOKEN_STATUS_REFRESH_EVENT:
                     # token refresh detected; indicate configuration should not be reloaded, and remove
                     # the token status key so it's not saved with the configuration data.
