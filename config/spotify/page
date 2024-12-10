@@ -1,0 +1,60 @@
+views:
+  - title: Home
+    sections:
+      - type: grid
+        cards:
+          - type: media-control
+            entity: media_player.spotify_jialong_he
+          - type: custom:apexcharts-card
+            graph_span: 7d
+            update_interval: 1min
+            series:
+              - entity: sensor.spotify_carbon_footprint
+                name: Carbon footprint
+                color: rgba(51, 195, 255, 0.5)
+          - type: custom:button-card
+            entity: input_boolean.eco_mode
+            show_state: true
+            icon: mdi:leaf-circle
+            size: 100%
+            styles:
+              card:
+                - height: 100px
+                - width: 140px
+                - display: flex
+                - align-items: center
+                - justify-content: center
+            tap_action:
+              action: toggle
+              entity: input_boolean.eco_mode
+      - type: grid
+        cards:
+          - type: entities
+            entities:
+              - input_text.spotify_media_player
+          - type: entities
+            entities:
+              - input_text.spotify_device_id
+          - type: entities
+            entities:
+              - input_select.spotify_mode
+          - type: entities
+            entities:
+              - switch.spotify_usage
+          - type: entities
+            entities:
+              - sensor.spotify_listening_time
+          - type: entities
+            entities:
+              - sensor.spotify_weekly_listening_time
+          - type: entities
+            entities:
+              - sensor.spotify_monthly_listening_time
+          - type: entities
+            entities:
+              - entity: sensor.spotify_volume
+                icon: mdi:volume-high
+          - type: entities
+            entities:
+              - entity: sensor.spotify_carbon_footprint
+                icon: mdi:leaf-circle

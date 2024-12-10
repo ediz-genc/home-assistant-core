@@ -19,7 +19,7 @@ from homeassistant.const import CONF_LOCATION, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers.typing import VolDictType
 
-from .const import AUTO_BYPASS, CONF_USERCODES, DOMAIN
+from .const import AUTO_BYPASS, CODE_REQUIRED, CONF_USERCODES, DOMAIN
 
 PASSWORD_DATA_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
 
@@ -193,15 +193,11 @@ class TotalConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         config_entry: ConfigEntry,
     ) -> TotalConnectOptionsFlowHandler:
         """Get options flow."""
-        return TotalConnectOptionsFlowHandler(config_entry)
+        return TotalConnectOptionsFlowHandler()
 
 
 class TotalConnectOptionsFlowHandler(OptionsFlow):
     """TotalConnect options flow handler."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, bool] | None = None
@@ -217,7 +213,11 @@ class TotalConnectOptionsFlowHandler(OptionsFlow):
                     vol.Required(
                         AUTO_BYPASS,
                         default=self.config_entry.options.get(AUTO_BYPASS, False),
-                    ): bool
+                    ): bool,
+                    vol.Required(
+                        CODE_REQUIRED,
+                        default=self.config_entry.options.get(CODE_REQUIRED, False),
+                    ): bool,
                 }
             ),
         )
